@@ -4,4 +4,19 @@ DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "$DIR/common.sh"
 
 tool="$(basename "$0")"
+
+# Check for global installs and suggest npx alternative
+if [[ "$*" =~ install.*-g ]]; then
+    echo "💡 Global packages aren't accessible from your host system in this Docker-based setup."
+    echo "   Instead, use npx to run packages without installing them globally:"
+    echo ""
+    echo "   ❌ npm install -g <package>"
+    echo "   ✅ npx <package>"
+    echo ""
+    echo "   This is the modern best practice and works with any package!"
+    echo ""
+    echo "   Proceeding with global install in container (won't be accessible from host)..."
+    echo ""
+fi
+
 docker_exec "${tool}" "$@"

@@ -4,6 +4,18 @@ This project removes host Node/npm from macOS and replaces `node`, `npm`, `npx`,
 with Docker-backed shims. The goal is to reduce the risk of supply-chain attacks impacting your host,
 especially for web3 work.
 
+## Why This Matters
+
+**Recent Supply Chain Attack (September 2025)**: [18 popular npm packages were compromised](https://www.aikido.dev/blog/npm-debug-and-chalk-packages-compromised), including `debug`, `chalk`, and `ansi-styles` with over 2 billion weekly downloads.
+
+**Your Protection**: By running Node.js tools in isolated Docker containers, even if malicious packages are installed, they cannot:
+- Access your host system files
+- Modify your macOS environment
+- Persist malicious code outside the container
+- Access sensitive data on your machine
+
+This approach provides **defense in depth** against supply chain attacks that traditional npm installations cannot offer.
+
 ⚠️ **Destructive**: `scripts/nuke-node-macos.sh` removes NVM/Homebrew Node installs and caches.
 Use at your own risk.
 
@@ -13,6 +25,7 @@ Use at your own risk.
 - **Isolated execution** - All Node.js tools run in Docker containers
 - **Safe defaults** - `.npmrc` configured with `ignore-scripts=true` and other defaults
 - **No host contamination** - Zero Node.js installation on your macOS system
+- **Supply chain protection** - Malicious packages cannot access your host system
 
 ### 🚀 **Automatic Package Manager Installation**
 - **yarn & pnpm auto-install** - Automatically installed on first use via npm
@@ -66,6 +79,15 @@ node --version    # Uses latest LTS by default
 npm install       # Works exactly like before
 yarn add lodash   # Auto-installs yarn on first use
 pnpm add express  # Auto-installs pnpm on first use
+npx create-react-app my-app  # No global install needed
+```
+
+### Global Package Management
+```bash
+# Recommended: Use npx (no global installs needed)
+npx wrangler --version
+npx typescript --version
+npx eslint --init
 npx create-react-app my-app
 ```
 
