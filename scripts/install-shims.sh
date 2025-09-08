@@ -34,9 +34,12 @@ case ":$PATH:" in
     echo "✅ bin/ already on PATH"
     ;;
   *) 
-    # Determine shell config file
-    shell_rc="${HOME}/.zshrc"
-    [ -n "${BASH_VERSION:-}" ] && shell_rc="${HOME}/.bashrc"
+    # Determine shell config file based on user's actual shell
+    case "$SHELL" in
+      */zsh) shell_rc="${HOME}/.zshrc" ;;
+      */bash) shell_rc="${HOME}/.bashrc" ;;
+      *) shell_rc="${HOME}/.zshrc" ;; # Default to zsh on macOS
+    esac
     
     # Create backup
     [ -f "$shell_rc" ] && cp "$shell_rc" "$shell_rc.backup.$(date +%Y%m%d_%H%M%S)"
@@ -56,6 +59,10 @@ mkdir -p "$HOME/.npm" "$HOME/.cache/pnpm" "$HOME/.cache/yarn" "$HOME/.config/pnp
 
 # Test Docker connectivity
 echo "🐳 Testing Docker connectivity..."
+echo "   Note: You may see a macOS security dialog asking for permission to access data from other apps."
+echo "   This is normal because Docker needs to access system resources to run containers."
+echo "   Click 'Allow' to continue - this is required for the Node.js shims to work properly."
+echo ""
 if docker run --rm node:lts node --version >/dev/null 2>&1; then
     echo "✅ Docker connectivity test passed"
 else

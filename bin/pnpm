@@ -5,7 +5,7 @@ source "$DIR/common.sh"
 
 tool="$(basename "$0")"
 if [[ "$tool" == "yarn" || "$tool" == "pnpm" ]]; then
-  docker_exec bash -lc "corepack enable >/dev/null 2>&1 || true; ${tool} \"\$@\"" -- "$@"
+  docker_exec sh -c "npm install -g ${tool} >/dev/null 2>&1 || true; exec ${tool} \"\$@\"" -- "$@"
 else
   docker_exec "${tool}" "$@"
 fi

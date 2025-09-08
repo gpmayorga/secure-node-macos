@@ -38,11 +38,19 @@ if [ -s "$HOME/.nvm/nvm.sh" ]; then
 fi
 
 echo "🧹 Removing system-wide installations..."
+echo "   This requires sudo to remove files from /usr/local and /opt/homebrew"
+echo "   The following directories will be removed:"
+echo "   • /usr/local/lib/node_modules, /usr/local/include/node"
+echo "   • /usr/local/bin/node, /usr/local/bin/npm, /usr/local/bin/corepack"
+echo "   • /opt/homebrew/lib/node_modules, /opt/homebrew/include/node"
+echo "   • /opt/homebrew/bin/node, /opt/homebrew/bin/npm, /opt/homebrew/bin/corepack"
+echo "   The script will turn on verbose mode for the removal process so you can see what's being executed"
+echo ""
 # Remove common global paths (Intel + Apple Silicon)
-sudo rm -rf \
+sudo bash -c 'set -x; rm -rf \
   /usr/local/lib/node_modules /usr/local/include/node /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/corepack \
   /opt/homebrew/lib/node_modules /opt/homebrew/include/node /opt/homebrew/bin/node /opt/homebrew/bin/npm /opt/homebrew/bin/corepack \
-  2>/dev/null || true
+  2>/dev/null || true'
 
 echo "🗂️  Removing user caches and configs..."
 # Per-user caches/config

@@ -32,8 +32,8 @@ resolve_image() {
     # Check package.json engines field
     elif [[ -f package.json ]]; then
         local engines_node
-        engines_node=$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).engines?.node" 2>/dev/null || echo "null")
-        if [[ "$engines_node" != "null" && "$engines_node" != "undefined" ]]; then
+        engines_node=$(grep -o '"node"[[:space:]]*:[[:space:]]*"[^"]*"' package.json 2>/dev/null | head -1 | sed 's/.*"node"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || echo "")
+        if [[ -n "$engines_node" && "$engines_node" != "null" && "$engines_node" != "undefined" ]]; then
             local ver
             ver=$(echo "$engines_node" | sed -E 's/[<>=!]+//g' | cut -d. -f1)
             [[ -n "$ver" ]] && tag="node:${ver}-alpine"
@@ -56,7 +56,7 @@ should_map_ports() {
 docker_exec() {
     ensure_docker
     local img; img="$(resolve_image)"
-    local -a args=(run --rm -it
+    local -a args=(run --rm
         -v "$PWD":/work -w /work
         -v "$HOME/.npm":/root/.npm
         -v "$HOME/.cache/pnpm":/root/.cache/pnpm
@@ -64,6 +64,11 @@ docker_exec() {
         -v "$HOME/.config/pnpm":/root/.config/pnpm
         -e INIT_CWD=/work
     )
+    
+    # Add interactive mode only if we have a TTY and it's not a simple version check
+    if [[ -t 0 && -t 1 && ! "$*" =~ (--version|--help|-v|-h) ]]; then
+        args+=(-it)
+    fi
 
     # Add git config if it exists
     [[ -f "$HOME/.gitconfig" ]] && args+=(-v "$HOME/.gitconfig":/etc/gitconfig:ro)
