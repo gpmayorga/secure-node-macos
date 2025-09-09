@@ -28,7 +28,8 @@ Use at your own risk.
 - **Supply chain protection** - Malicious packages cannot access your host system
 
 ### 🚀 **Automatic Package Manager Installation**
-- **yarn & pnpm auto-install** - Automatically installed on first use via npm
+- **yarn & pnpm via corepack** - Automatically uses the correct version via corepack
+- **Version-aware** - Respects `packageManager` field in package.json
 - **No manual setup** - Just run `yarn` or `pnpm` and they'll be ready
 - **Persistent caches** - Package manager caches are mounted and persist between runs
 
