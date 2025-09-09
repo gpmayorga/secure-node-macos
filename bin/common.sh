@@ -64,6 +64,7 @@ docker_exec() {
         -v "$HOME/.config/pnpm":/root/.config/pnpm
         -e INIT_CWD=/work
         -e COREPACK_ENABLE_STRICT=0
+        -e COREPACK_ENABLE_NETWORK=1
     )
     
     # Add interactive mode only if we have a TTY and it's not a simple version check
@@ -83,5 +84,5 @@ docker_exec() {
     fi
 
     # Always enable corepack first, then run the command
-    exec docker "${args[@]}" "$img" sh -c "corepack enable >/dev/null 2>&1 || true; exec \"\$@\"" -- "$@"
+    exec docker "${args[@]}" "$img" sh -c "corepack enable >/dev/null 2>&1 || true; corepack install >/dev/null 2>&1 || true; exec \"\$@\"" -- "$@"
 }
