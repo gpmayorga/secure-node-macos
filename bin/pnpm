@@ -4,8 +4,4 @@ DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "$DIR/common.sh"
 
 tool="$(basename "$0")"
-if [[ "$tool" == "yarn" || "$tool" == "pnpm" ]]; then
-  docker_exec sh -c "corepack enable >/dev/null 2>&1 || true; exec ${tool} \"\$@\"" -- "$@"
-else
-  docker_exec "${tool}" "$@"
-fi
+docker_exec "${tool}" "$@"
