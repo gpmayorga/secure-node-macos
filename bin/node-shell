@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$DIR/common.sh"
+
+# Open an interactive shell inside the Node container in the current project
+# Corepack is enabled so yarn/pnpm are available per packageManager
+
+ensure_docker
+img="$(resolve_image)"
+
+declare -a args=(run --rm -it \
+    -v "$PWD":/work -w /work \
+    -v "$HOME/.npm":/root/.npm \
+    -v "$HOME/.npmrc":/root/.npmrc \
+    -v "$HOME/.cache/pnpm":/root/.cache/pnpm \
+    -v "$HOME/.cache/yarn":/root/.cache/yarn \
+    -v "$HOME/.config/pnpm":/root/.config/pnpm \
+    -e INIT_CWD=/work \
+    -e COREPACK_ENABLE_STRICT=0 \
+    -e COREPACK_ENABLE_NETWORK=1
+)
+
+# Map common dev ports so shell can run dev servers directly
+if should_map_ports "${*:-}"; then
+    IFS=',' read -ra ports <<< "${DOCKER_NODE_PORTS:-3000,5173,8080,4200,3001,4000,5000}"
+    for p in "${ports[@]}"; do args+=(-p "$p:$p"); done
+fi
+
+# Ensure host .npmrc exists for npm login to persist
+if [[ ! -f "$HOME/.npmrc" ]]; then
+    : > "$HOME/.npmrc" || true
+    chmod 600 "$HOME/.npmrc" 2>/dev/null || true
+fi
+
+exec docker "${args[@]}" "$img" sh -lc "corepack enable >/dev/null 2>&1 || true; corepack install >/dev/null 2>&1 || true; exec sh"
+
+
+
+

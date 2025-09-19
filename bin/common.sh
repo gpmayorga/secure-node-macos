@@ -59,6 +59,7 @@ docker_exec() {
     local -a args=(run --rm
         -v "$PWD":/work -w /work
         -v "$HOME/.npm":/root/.npm
+        -v "$HOME/.npmrc":/root/.npmrc
         -v "$HOME/.cache/pnpm":/root/.cache/pnpm
         -v "$HOME/.cache/yarn":/root/.cache/yarn
         -v "$HOME/.config/pnpm":/root/.config/pnpm
@@ -66,6 +67,12 @@ docker_exec() {
         -e COREPACK_ENABLE_STRICT=0
         -e COREPACK_ENABLE_NETWORK=1
     )
+    
+    # Ensure host .npmrc exists so npm login persists across runs
+    if [[ ! -f "$HOME/.npmrc" ]]; then
+        : > "$HOME/.npmrc" || true
+        chmod 600 "$HOME/.npmrc" 2>/dev/null || true
+    fi
     
     # Add interactive mode only if we have a TTY and it's not a simple version check
     if [[ -t 0 && -t 1 && ! "$*" =~ (--version|--help|-v|-h) ]]; then
