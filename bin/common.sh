@@ -4,9 +4,59 @@
 
 set -Eeuo pipefail
 
+# Get the shims directory to exclude it from PATH searches
+NODE_SHIMS_DIR="${NODE_SHIMS_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)}"
+
 # Check if running in Docker
 is_docker() {
     [ -f /.dockerenv ] || [ -f /proc/1/cgroup ] && grep -q docker /proc/1/cgroup
+}
+
+# Check if local override is enabled
+use_local_override() {
+    [[ "${NODE_SHIMS_MODE:-}" == "local" ]] || is_truthy "${NODE_SHIMS_LOCAL:-}"
+}
+
+# Check if a value is truthy (1, true, yes, on)
+is_truthy() {
+    local val="${1:-}"
+    [[ "$val" == "1" ]] || [[ "$val" == "true" ]] || [[ "$val" == "yes" ]] || [[ "$val" == "on" ]]
+}
+
+# Execute command using local installation (bypass Docker)
+exec_local() {
+    local tool="$1"
+    shift
+    
+    # Build PATH without the shims directory
+    local old_path="${PATH:-}"
+    local new_path=""
+    IFS=':' read -ra path_parts <<< "$old_path"
+    for part in "${path_parts[@]}"; do
+        # Normalize paths for comparison
+        local normalized_part
+        normalized_part="$(cd -P "$part" 2>/dev/null && pwd || echo "$part")"
+        local normalized_shims
+        normalized_shims="$(cd -P "$NODE_SHIMS_DIR" 2>/dev/null && pwd || echo "$NODE_SHIMS_DIR")"
+        
+        if [[ "$normalized_part" != "$normalized_shims" ]]; then
+            [[ -n "$new_path" ]] && new_path="${new_path}:"
+            new_path="${new_path}${part}"
+        fi
+    done
+    
+    # Search for the tool in the modified PATH
+    local tool_path
+    tool_path="$(PATH="$new_path" command -v "$tool" 2>/dev/null || true)"
+    
+    if [[ -z "$tool_path" ]]; then
+        echo "❌ Local override requested but '$tool' was not found outside the Docker shims." >&2
+        echo "   Either install $tool locally or remove NODE_SHIMS_MODE/NODE_SHIMS_LOCAL." >&2
+        exit 1
+    fi
+    
+    # Execute the local tool
+    exec "$tool_path" "$@"
 }
 
 # Ensure Docker is available and running
@@ -54,6 +104,13 @@ should_map_ports() {
 
 # Execute command in Docker container
 docker_exec() {
+    # Check if local override is enabled
+    if use_local_override; then
+        local tool="$1"
+        shift
+        exec_local "$tool" "$@"
+    fi
+    
     ensure_docker
     local img; img="$(resolve_image)"
     local -a args=(run --rm
@@ -84,10 +141,17 @@ docker_exec() {
 
     # Map ports for development servers
     if should_map_ports "$*"; then
-        IFS=',' read -ra ports <<< "${DOCKER_NODE_PORTS:-3000,5173,8080,4200,3001,4000,5000}"
+        IFS=',' read -ra ports <<< "${DOCKER_NODE_PORTS:-3000,5173,8080,4200,3001,4000,5000,8787}"
         for p in "${ports[@]}"; do 
             args+=(-p "${p}:${p}")
         done
+    fi
+
+    # Wrangler login launches an OAuth callback server on localhost.
+    # Ensure that port is bridged so the host browser can talk to the container.
+    if [[ "$*" =~ wrangler[[:space:]]+login ]]; then
+        local login_port="${WRANGLER_LOGIN_PORT:-8976}"
+        args+=(-p "${login_port}:${login_port}")
     fi
 
     # Always enable corepack first, then run the command

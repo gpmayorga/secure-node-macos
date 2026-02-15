@@ -129,6 +129,11 @@ Set the `DOCKER_NODE_PORTS` environment variable to customize port mapping:
 export DOCKER_NODE_PORTS="3000,4000,5000,8000"
 ```
 
+Wrangler login runs a short-lived OAuth callback server on `localhost`. The shims now expose this automatically on port `8976`, but you can override it if necessary:
+```bash
+export WRANGLER_LOGIN_PORT=9797
+```
+
 ### Custom Node.js Image
 Override the default image with the `NODE_IMAGE` environment variable:
 ```bash
