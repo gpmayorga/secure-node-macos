@@ -1,0 +1,7 @@
+{
+  "name": "docker-in-npm-test",
+  "private": true,
+  "scripts": {
+    "docker:test": "docker run --rm hello-world"
+  }
+}

@@ -93,6 +93,11 @@ resolve_image() {
     echo "${NODE_IMAGE:-$tag}"
 }
 
+# Check if Docker socket should be mounted (for npm scripts that run docker)
+use_docker_socket() {
+    [[ "${NODE_SHIMS_DOCKER:-}" == "1" ]] || is_truthy "${NODE_SHIMS_DOCKER:-}"
+}
+
 # Check if command should map ports (for dev servers)
 should_map_ports() {
     local cmd="$*"
@@ -139,6 +144,22 @@ docker_exec() {
     # Add git config if it exists
     [[ -f "$HOME/.gitconfig" ]] && args+=(-v "$HOME/.gitconfig":/etc/gitconfig:ro)
 
+    # Mount Docker socket so npm scripts can run docker (e.g. docker build, docker run)
+    if use_docker_socket; then
+        local docker_sock=""
+        if [[ -S /var/run/docker.sock ]]; then
+            docker_sock=/var/run/docker.sock
+        elif [[ -S "${HOME:-}/.docker/run/docker.sock" ]]; then
+            docker_sock="${HOME}/.docker/run/docker.sock"
+        fi
+        if [[ -n "$docker_sock" ]]; then
+            args+=(-v "$docker_sock":/var/run/docker.sock -e NODE_SHIMS_DOCKER=1)
+        else
+            echo "❌ Docker socket not found (check /var/run/docker.sock or ~/.docker/run/docker.sock). Is Docker Desktop running?" >&2
+            exit 1
+        fi
+    fi
+
     # Map ports for development servers
     if should_map_ports "$*"; then
         IFS=',' read -ra ports <<< "${DOCKER_NODE_PORTS:-3000,5173,8080,4200,3001,4000,5000,8787}"
@@ -154,6 +175,10 @@ docker_exec() {
         args+=(-p "${login_port}:${login_port}")
     fi
 
-    # Always enable corepack first, then run the command
-    exec docker "${args[@]}" "$img" sh -c "corepack enable >/dev/null 2>&1 || true; corepack install >/dev/null 2>&1 || true; exec \"\$@\"" -- "$@"
+    # Enable corepack; if Docker socket is mounted, install docker-cli so npm scripts can run docker
+    local setup="corepack enable >/dev/null 2>&1 || true; corepack install >/dev/null 2>&1 || true"
+    if use_docker_socket; then
+        setup="$setup; apk add --no-cache docker-cli >/dev/null 2>&1 || true"
+    fi
+    exec docker "${args[@]}" "$img" sh -c "$setup; exec \"\$@\"" -- "$@"
 }

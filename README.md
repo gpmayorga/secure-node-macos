@@ -134,6 +134,20 @@ Wrangler login runs a short-lived OAuth callback server on `localhost`. The shim
 export WRANGLER_LOGIN_PORT=9797
 ```
 
+### Docker from npm scripts
+To allow **npm scripts** (e.g. `npm run build` that runs `docker build`) to use Docker, mount the host Docker socket and enable the Docker CLI inside the Node container:
+
+```bash
+export NODE_SHIMS_DOCKER=1
+npm run build   # your script can now run docker build, docker run, etc.
+```
+
+This mounts `/var/run/docker.sock` into the container and installs the `docker` CLI there, so containers started from npm scripts run on your host Docker daemon. To test:
+
+```bash
+./scripts/test-docker-in-npm.sh
+```
+
 ### Custom Node.js Image
 Override the default image with the `NODE_IMAGE` environment variable:
 ```bash
