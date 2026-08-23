@@ -166,7 +166,7 @@ save-exact=true
 
 1. **Shims intercept commands** - `node`, `npm`, `yarn`, `pnpm` commands are caught by shims
 2. **Docker containers** - Commands run in isolated Docker containers
-3. **Volume mounting** - Your project directory and caches are mounted
+3. **Volume mounting** - Your project is mounted at its real host path (and as `/work`) so `node /Users/…/script.js` works; caches are mounted separately
 4. **Version detection** - Smart detection of Node.js version from various sources
 5. **Automatic setup** - Package managers install automatically when needed
 
@@ -189,4 +189,11 @@ open -a Docker
 ```bash
 # Customize ports if needed
 export DOCKER_NODE_PORTS="3001,4001,5001"
+```
+
+### Absolute paths 404 inside Docker
+The project is bind-mounted at the same path as on the host, so absolute paths *under `$PWD`* resolve. Extra existing file arguments outside `$PWD` are mounted at the same path. Scripts that live outside the project and are macOS-native (e.g. Cursor's bundled `esbuild`) fall back to a host `node`. To force that for a whole session:
+
+```bash
+export NODE_SHIMS_MODE=local
 ```

@@ -98,6 +98,118 @@ use_docker_socket() {
     [[ "${NODE_SHIMS_DOCKER:-}" == "1" ]] || is_truthy "${NODE_SHIMS_DOCKER:-}"
 }
 
+# Populate __SHIM_PROJECT_MOUNTS so the project is visible at its real host
+# path. Remapping $PWD -> /work alone makes `node /Users/.../script.js` 404
+# inside the container even when the file is under $PWD. /work stays as an
+# alias for anything that still assumes that layout.
+prepare_project_mounts() {
+    local logical physical
+    logical="$(pwd)"
+    physical="$(pwd -P)"
+    __SHIM_PROJECT_MOUNTS=(
+        -v "$physical":"$physical"
+        -v "$physical":/work
+        -w "$logical"
+        -e "INIT_CWD=$logical"
+    )
+    if [[ "$logical" != "$physical" ]]; then
+        __SHIM_PROJECT_MOUNTS+=(-v "$physical":"$logical")
+    fi
+    __SHIM_WORKDIR_PHYSICAL="$physical"
+}
+
+# Bind extra absolute argv paths that exist on the host but sit outside $PWD.
+# Mount the path itself (file or directory), never $HOME or /. Callers that
+# pass --config=/tmp/foo.json then keep working without widening isolation
+# to the whole home directory.
+append_extra_host_mounts() {
+    local work_dir="$1"
+    shift
+    local arg path resolved seen=""
+    for arg in "$@"; do
+        path=""
+        case "$arg" in
+            --*=/*) path="${arg#*=}" ;;
+            /*) path="$arg" ;;
+            *) continue ;;
+        esac
+        [[ -e "$path" ]] || continue
+        if [[ -d "$path" ]]; then
+            resolved="$(cd "$path" && pwd -P)"
+        else
+            resolved="$(cd "$(dirname "$path")" && pwd -P)/$(basename "$path")"
+        fi
+        if [[ "$resolved" == "$work_dir" || "$resolved" == "$work_dir/"* ]]; then
+            continue
+        fi
+        if [[ "$resolved" == "/" || "$resolved" == "$HOME" ]]; then
+            continue
+        fi
+        case "$work_dir" in
+            "$resolved"/*) continue ;;
+        esac
+        case ":$seen:" in
+            *":$resolved:"*) continue ;;
+        esac
+        seen="${seen:+$seen:}$resolved"
+        __SHIM_PROJECT_MOUNTS+=(-v "$resolved":"$resolved")
+        # macOS /tmp -> /private/tmp: callers still pass the logical path.
+        if [[ "$path" != "$resolved" ]]; then
+            __SHIM_PROJECT_MOUNTS+=(-v "$resolved":"$path")
+        fi
+        if is_truthy "${NODE_SHIMS_DEBUG:-}"; then
+            echo "node-shims: mounting extra host path: $path -> $resolved" >&2
+        fi
+    done
+}
+
+# node is sometimes invoked to run a host script outside $PWD (e.g. Cursor's
+# esbuild-wasm service: node /Applications/Cursor.app/.../esbuild-wasm/bin/esbuild).
+# Those paths are not the project mount, and the binary is often macOS-native
+# (Alpine cannot exec it). Fall back to a real host node instead of failing.
+needs_host_node() {
+    local tool="$1"
+    shift
+    [[ "$tool" == "node" ]] || return 1
+
+    local arg script_path="" work_dir
+    work_dir="$(pwd -P)"
+
+    for arg in "$@"; do
+        case "$arg" in
+            -*) continue ;;
+            *)
+                if [[ "$arg" == /* ]]; then
+                    script_path="$arg"
+                elif [[ -f "$arg" ]]; then
+                    script_path="$(cd "$(dirname "$arg")" && pwd -P)/$(basename "$arg")"
+                else
+                    return 1
+                fi
+
+                if [[ ! -f "$script_path" ]]; then
+                    return 1
+                fi
+
+                # Compare physical paths: on macOS pwd and pwd -P differ
+                # (/var vs /private/var), which would treat in-tree scripts
+                # as off-tree and skip Docker for ordinary project files.
+                local script_dir
+                script_dir="$(cd "$(dirname "$script_path")" && pwd -P)"
+                if [[ "$script_dir" == "$work_dir" || "$script_dir" == "$work_dir/"* ]]; then
+                    return 1
+                fi
+
+                if is_truthy "${NODE_SHIMS_DEBUG:-}"; then
+                    echo "node-shims: using host node for script outside \$PWD: $script_path" >&2
+                fi
+                return 0
+                ;;
+        esac
+    done
+    return 1
+}
+
 # Check if command should map ports (for dev servers)
 should_map_ports() {
     local cmd="$*"
@@ -109,23 +221,29 @@ should_map_ports() {
 
 # Execute command in Docker container
 docker_exec() {
+    local tool="$1"
+    shift
+
     # Check if local override is enabled
     if use_local_override; then
-        local tool="$1"
-        shift
         exec_local "$tool" "$@"
     fi
-    
+
+    if needs_host_node "$tool" "$@"; then
+        exec_local "$tool" "$@"
+    fi
+
     ensure_docker
     local img; img="$(resolve_image)"
+    prepare_project_mounts
+    append_extra_host_mounts "$__SHIM_WORKDIR_PHYSICAL" "$@"
     local -a args=(run --rm
-        -v "$PWD":/work -w /work
+        "${__SHIM_PROJECT_MOUNTS[@]}"
         -v "$HOME/.npm":/root/.npm
         -v "$HOME/.npmrc":/root/.npmrc
         -v "$HOME/.cache/pnpm":/root/.cache/pnpm
         -v "$HOME/.cache/yarn":/root/.cache/yarn
         -v "$HOME/.config/pnpm":/root/.config/pnpm
-        -e INIT_CWD=/work
         -e COREPACK_ENABLE_STRICT=0
         -e COREPACK_ENABLE_NETWORK=1
     )
@@ -180,5 +298,5 @@ docker_exec() {
     if use_docker_socket; then
         setup="$setup; apk add --no-cache docker-cli >/dev/null 2>&1 || true"
     fi
-    exec docker "${args[@]}" "$img" sh -c "$setup; exec \"\$@\"" -- "$@"
+    exec docker "${args[@]}" "$img" sh -c "$setup; exec \"\$@\"" -- "$tool" "$@"
 }
