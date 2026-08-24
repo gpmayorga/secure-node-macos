@@ -197,3 +197,8 @@ The project is bind-mounted at the same path as on the host, so absolute paths *
 ```bash
 export NODE_SHIMS_MODE=local
 ```
+
+### `op run` environment is dropped
+`docker run` does not inherit the host environment. When the shim’s **direct parent** is `op run` (1Password CLI), exported host vars are forwarded with `-e NAME` so a FIFO `.env` that `op` already resolved reaches the container. `PATH` / `HOME` / `TMPDIR` and similar are not forwarded (they would break the image).
+
+This does nothing if `op` is not installed, and nothing for `npm` / `node` started from a shell. `op run --env-file=.env -- npm install` *will* forward, because that is what wrapping the command in `op run` means. Host tools the image lacks (`gcloud`) still need `NODE_SHIMS_MODE=local`. `NODE_SHIMS_DEBUG=1` logs how many vars were forwarded.

@@ -10,8 +10,10 @@ ensure_docker
 img="$(resolve_image)"
 
 prepare_project_mounts
+append_op_run_env
 declare -a args=(run --rm -it \
     "${__SHIM_PROJECT_MOUNTS[@]}" \
+    "${__SHIM_OP_ENV[@]}" \
     -v "$HOME/.npm":/root/.npm \
     -v "$HOME/.npmrc":/root/.npmrc \
     -v "$HOME/.cache/pnpm":/root/.cache/pnpm \

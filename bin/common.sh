@@ -163,6 +163,50 @@ append_extra_host_mounts() {
     done
 }
 
+# True only when this shim is the direct child of `op run`. `op` does not
+# need to be installed: any other parent (zsh, npm, Cursor, …) is a no-op.
+# `op item` / `op read` do not match — only the `run` verb, which is what
+# injects a 1Password env-file into this process.
+parent_is_op_run() {
+    local pid comm args
+    pid="${PPID:-}"
+    [[ -n "$pid" && "$pid" != "0" ]] || return 1
+    comm="$(ps -p "$pid" -o comm= 2>/dev/null | awk '{print $1}')"
+    comm="${comm##*/}"
+    [[ "$comm" == "op" ]] || return 1
+    args="$(ps -p "$pid" -o args= 2>/dev/null || true)"
+    [[ "$args" == 'op run'* || "$args" == *' run '* ]]
+}
+
+# `op run --env-file=.env -- node …` resolves a (possibly FIFO) env file on
+# the host and puts those vars in this process. Docker does not inherit them
+# unless we pass `-e NAME` (value taken from the current environment, so
+# secrets stay off argv). Never read or mount the FIFO.
+# No-op when the parent is not `op run`.
+append_op_run_env() {
+    __SHIM_OP_ENV=()
+    parent_is_op_run || return 0
+
+    local name count=0
+    while IFS= read -r name; do
+        [[ -n "$name" ]] || continue
+        case "$name" in
+            PATH|HOME|HOSTNAME|PWD|OLDPWD|SHLVL|_|TERM|TMPDIR|TMP|TEMP|USER|LOGNAME|SHELL|USERNAME)
+                continue ;;
+            SSH_*|DOCKER_*|NODE_SHIMS_*|NVM_*|BASH_*|ZSH_*|XPC_*|__*)
+                continue ;;
+            COMMAND_MODE|SECURITYSESSIONID|LaunchInstanceID|HOMEBREW_*|INFOPATH|MANPATH)
+                continue ;;
+        esac
+        __SHIM_OP_ENV+=(-e "$name")
+        count=$((count + 1))
+    done < <(compgen -e)
+
+    if is_truthy "${NODE_SHIMS_DEBUG:-}"; then
+        echo "node-shims: parent is op run; forwarding $count host env var(s)" >&2
+    fi
+}
+
 # node is sometimes invoked to run a host script outside $PWD (e.g. Cursor's
 # esbuild-wasm service: node /Applications/Cursor.app/.../esbuild-wasm/bin/esbuild).
 # Those paths are not the project mount, and the binary is often macOS-native
@@ -237,8 +281,10 @@ docker_exec() {
     local img; img="$(resolve_image)"
     prepare_project_mounts
     append_extra_host_mounts "$__SHIM_WORKDIR_PHYSICAL" "$@"
+    append_op_run_env
     local -a args=(run --rm
         "${__SHIM_PROJECT_MOUNTS[@]}"
+        "${__SHIM_OP_ENV[@]}"
         -v "$HOME/.npm":/root/.npm
         -v "$HOME/.npmrc":/root/.npmrc
         -v "$HOME/.cache/pnpm":/root/.cache/pnpm
