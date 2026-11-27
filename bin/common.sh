@@ -254,6 +254,155 @@ needs_host_node() {
     return 1
 }
 
+# ---------------------------------------------------------------------------
+# Wrangler (Cloudflare Workers CLI) support
+#
+# Wrangler needs four things the generic container does not give it:
+#   1. a persistent config dir, or `wrangler login` is lost with --rm
+#   2. CLOUDFLARE_* / WRANGLER_* env vars (API token auth, no login needed)
+#   3. listeners bound to 0.0.0.0, or Docker port publishing cannot reach them
+#   4. a glibc image, because workerd (used by `wrangler dev`) has no musl build
+# All of it is scoped to wrangler projects/commands so other projects never
+# see the Cloudflare credentials.
+# ---------------------------------------------------------------------------
+
+# True if an argv token is the wrangler executable (npx wrangler, wrangler@4,
+# node_modules/.bin/wrangler, ...).
+is_wrangler_token() {
+    case "$1" in
+        wrangler|wrangler@*|*/wrangler|*/wrangler.js) return 0 ;;
+    esac
+    return 1
+}
+
+argv_invokes_wrangler() {
+    local arg
+    for arg in "$@"; do
+        is_wrangler_token "$arg" && return 0
+    done
+    return 1
+}
+
+# True if the current directory is a wrangler project. Covers `npm run deploy`
+# style invocations where "wrangler" never appears in argv.
+project_uses_wrangler() {
+    local f
+    for f in wrangler.toml wrangler.json wrangler.jsonc; do
+        if [[ -f "$f" ]]; then
+            return 0
+        fi
+    done
+    [[ -f package.json ]] && grep -q '"wrangler"[[:space:]]*:' package.json
+}
+
+# NODE_SHIMS_WRANGLER: auto (default) | 1 to force on | 0 to force off
+use_wrangler_support() {
+    local mode="${NODE_SHIMS_WRANGLER:-auto}"
+    if [[ "$mode" != "auto" ]]; then
+        is_truthy "$mode"
+        return
+    fi
+    argv_invokes_wrangler "$@" || project_uses_wrangler
+}
+
+# Print the non-flag words after the wrangler token, e.g. "pages dev" or "login".
+wrangler_subcommand() {
+    local arg seen=0 out=""
+    for arg in "$@"; do
+        if (( seen )); then
+            case "$arg" in
+                -*) continue ;;
+            esac
+            out="${out:+$out }$arg"
+        elif is_wrangler_token "$arg"; then
+            seen=1
+        fi
+    done
+    printf '%s' "$out"
+}
+
+# True if the flag (e.g. --ip) is present as `--ip`, `--ip=x`, or `--no-ip`.
+has_flag() {
+    local flag="$1" arg
+    shift
+    for arg in "$@"; do
+        case "$arg" in
+            "$flag"|"$flag"=*|"--no-${flag#--}") return 0 ;;
+        esac
+    done
+    return 1
+}
+
+# Populates:
+#   __SHIM_WRANGLER_DOCKER_ARGS  extra `docker run` args (mounts, env, ports)
+#   __SHIM_TOOL_ARGS             argv for the tool, with container flags added
+prepare_wrangler() {
+    __SHIM_WRANGLER_DOCKER_ARGS=()
+    __SHIM_TOOL_ARGS=("$@")
+    use_wrangler_support "$@" || return 0
+
+    local debug=0
+    is_truthy "${NODE_SHIMS_DEBUG:-}" && debug=1
+
+    # 1. Persistent config dir (OAuth token from `wrangler login`).
+    #    Wrangler resolves it to $XDG_CONFIG_HOME/.wrangler = /root/.config/.wrangler
+    local config_dir="${NODE_SHIMS_WRANGLER_CONFIG_DIR:-$HOME/.config/node-shims/wrangler}"
+    if [[ "$config_dir" != "none" ]]; then
+        if [[ ! -d "$config_dir" ]]; then
+            mkdir -p "$config_dir"
+            chmod 700 "$config_dir" 2>/dev/null || true
+        fi
+        __SHIM_WRANGLER_DOCKER_ARGS+=(-v "$config_dir":/root/.config/.wrangler)
+        (( debug )) && echo "node-shims: wrangler config dir: $config_dir" >&2
+    fi
+
+    # 2. Forward Cloudflare/wrangler env vars by name (values stay off argv).
+    local name
+    while IFS= read -r name; do
+        case "$name" in
+            WRANGLER_LOGIN_PORT) continue ;;
+            CLOUDFLARE_*|WRANGLER_*)
+                __SHIM_WRANGLER_DOCKER_ARGS+=(-e "$name")
+                (( debug )) && echo "node-shims: forwarding $name" >&2
+                ;;
+        esac
+    done < <(compgen -e)
+
+    # 3. Make wrangler's listeners reachable through Docker port publishing.
+    #    Only possible when wrangler is in argv; `npm run dev` needs
+    #    `[dev] ip = "0.0.0.0"` in wrangler.toml instead (see README).
+    argv_invokes_wrangler "$@" || return 0
+    local inject=1
+    if [[ -n "${NODE_SHIMS_WRANGLER_FLAGS:-}" ]] && ! is_truthy "$NODE_SHIMS_WRANGLER_FLAGS"; then
+        inject=0
+    fi
+
+    local sub
+    sub="$(wrangler_subcommand "$@")"
+    case "$sub" in
+        login|login\ *)
+            # --device needs no callback server at all.
+            has_flag --device "$@" && return 0
+            # The OAuth page always redirects to http://localhost:8976 on the
+            # host browser; publish it on loopback only.
+            local login_port="${WRANGLER_LOGIN_PORT:-8976}"
+            __SHIM_WRANGLER_DOCKER_ARGS+=(-p "127.0.0.1:${login_port}:${login_port}")
+            if (( inject )); then
+                has_flag --callback-host "$@" || __SHIM_TOOL_ARGS+=(--callback-host=0.0.0.0)
+                has_flag --callback-port "$@" || __SHIM_TOOL_ARGS+=("--callback-port=${login_port}")
+                # No browser in the container: print the URL instead of failing to open it.
+                has_flag --browser "$@" || __SHIM_TOOL_ARGS+=(--browser=false)
+            fi
+            ;;
+        dev|dev\ *|pages\ dev|pages\ dev\ *)
+            if (( inject )) && ! has_flag --ip "$@"; then
+                __SHIM_TOOL_ARGS+=(--ip=0.0.0.0)
+            fi
+            ;;
+    esac
+    return 0
+}
+
 # Check if command should map ports (for dev servers)
 should_map_ports() {
     local cmd="$*"
@@ -282,9 +431,17 @@ docker_exec() {
     prepare_project_mounts
     append_extra_host_mounts "$__SHIM_WORKDIR_PHYSICAL" "$@"
     append_op_run_env
+    prepare_wrangler "$@"
+    # workerd (wrangler dev) is glibc-only; use the Debian variant of the same
+    # Node version for wrangler projects unless the user pinned NODE_IMAGE.
+    if use_wrangler_support "$@" && [[ -z "${NODE_IMAGE:-}" && "$img" == *-alpine ]]; then
+        img="${img%-alpine}-bookworm"
+    fi
+    # ${arr[@]+...} keeps empty arrays safe under `set -u` on macOS bash 3.2.
     local -a args=(run --rm
         "${__SHIM_PROJECT_MOUNTS[@]}"
-        "${__SHIM_OP_ENV[@]}"
+        ${__SHIM_OP_ENV[@]+"${__SHIM_OP_ENV[@]}"}
+        ${__SHIM_WRANGLER_DOCKER_ARGS[@]+"${__SHIM_WRANGLER_DOCKER_ARGS[@]}"}
         -v "$HOME/.npm":/root/.npm
         -v "$HOME/.npmrc":/root/.npmrc
         -v "$HOME/.cache/pnpm":/root/.cache/pnpm
@@ -332,17 +489,10 @@ docker_exec() {
         done
     fi
 
-    # Wrangler login launches an OAuth callback server on localhost.
-    # Ensure that port is bridged so the host browser can talk to the container.
-    if [[ "$*" =~ wrangler[[:space:]]+login ]]; then
-        local login_port="${WRANGLER_LOGIN_PORT:-8976}"
-        args+=(-p "${login_port}:${login_port}")
-    fi
-
     # Enable corepack; if Docker socket is mounted, install docker-cli so npm scripts can run docker
     local setup="corepack enable >/dev/null 2>&1 || true; corepack install >/dev/null 2>&1 || true"
     if use_docker_socket; then
-        setup="$setup; apk add --no-cache docker-cli >/dev/null 2>&1 || true"
+        setup="$setup; if command -v apk >/dev/null 2>&1; then apk add --no-cache docker-cli >/dev/null 2>&1 || true; elif command -v apt-get >/dev/null 2>&1; then (apt-get update -qq && apt-get install -y -qq --no-install-recommends docker.io) >/dev/null 2>&1 || true; fi"
     fi
-    exec docker "${args[@]}" "$img" sh -c "$setup; exec \"\$@\"" -- "$tool" "$@"
+    exec docker "${args[@]}" "$img" sh -c "$setup; exec \"\$@\"" -- "$tool" ${__SHIM_TOOL_ARGS[@]+"${__SHIM_TOOL_ARGS[@]}"}
 }
