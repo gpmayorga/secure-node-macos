@@ -1,0 +1,12 @@
+{
+  "name": "node-shims-hello",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "picocolors": "1.1.1"
+  }
+}

@@ -55,7 +55,7 @@ esac
 
 # Create cache directories
 echo "📁 Creating cache directories..."
-mkdir -p "$HOME/.npm" "$HOME/.cache/pnpm" "$HOME/.cache/yarn" "$HOME/.config/pnpm"
+mkdir -p "$HOME/.npm" "$HOME/.cache/pnpm" "$HOME/.cache/yarn" "$HOME/.yarn/berry" "$HOME/.config/pnpm"
 
 # Test Docker connectivity
 echo "🐳 Testing Docker connectivity..."
