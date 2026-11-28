@@ -130,6 +130,25 @@ set_package_manager() {
     [[ "$output" == *"Hello, world!"* ]]
 }
 
+@test "corepack runs in the container on the default image and on one that bundles it" {
+    make_project hello
+    set_package_manager "pnpm@$PNPM_VERSION"
+
+    # Node 25+ images have no corepack; the shims install a pinned copy.
+    run --separate-stderr corepack --version
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+
+    run --separate-stderr corepack pnpm --version
+    [ "$status" -eq 0 ]
+    [ "$output" = "$PNPM_VERSION" ]
+
+    echo 22 > .nvmrc
+    run --separate-stderr corepack pnpm --version
+    [ "$status" -eq 0 ]
+    [ "$output" = "$PNPM_VERSION" ]
+}
+
 @test "pnpm shares one store between NODE_SHIMS_LOCAL and Docker" {
     local host_path="${PATH#"$SHIMS_DIR:"}"
     PATH="$host_path" command -v npm >/dev/null || skip "no host npm outside the shims"

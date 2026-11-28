@@ -1,6 +1,6 @@
 # Node in Docker (macOS Hardening)
 
-This project removes host Node/npm from macOS and replaces `node`, `npm`, `npx`, `yarn`, and `pnpm`
+This project removes host Node/npm from macOS and replaces `node`, `npm`, `npx`, `yarn`, `pnpm` and `corepack`
 with Docker-backed shims. The goal is to reduce the risk of supply-chain attacks impacting your host,
 especially for web3 work.
 
@@ -31,6 +31,7 @@ Use at your own risk.
 - **yarn & pnpm via corepack** - Automatically uses the correct version via corepack (on Node 25+ images, which no longer bundle corepack, a pinned copy is installed once into `~/.cache/node-shims/corepack`)
 - **Version-aware** - Respects `packageManager` field in package.json
 - **No manual setup** - Just run `yarn` or `pnpm` and they'll be ready
+- **`corepack` itself is shimmed too** - `corepack use pnpm@latest`, `corepack pnpm --version` etc. run in the container with the same corepack the `yarn`/`pnpm` shims use, never a host copy
 - **Persistent caches** - Package manager caches are mounted and persist between runs
 
 ### 📦 **Smart Version Detection**
@@ -80,6 +81,7 @@ node --version    # Uses latest LTS by default
 npm install       # Works exactly like before
 yarn add lodash   # Auto-installs yarn on first use
 pnpm add express  # Auto-installs pnpm on first use
+corepack use pnpm@latest     # Runs corepack in the container too
 npx create-react-app my-app  # No global install needed
 ```
 
@@ -253,7 +255,7 @@ Node 25 and newer images do not include corepack. For those, the shims install `
 export NODE_SHIMS_COREPACK_VERSION=0.36.0
 ```
 
-Setting up corepack adds about 0.2s per call, so it only happens when the call may need yarn or pnpm: always for `yarn` and `pnpm`, and for `node` / `npm` / `npx` when `package.json` has a `packageManager` field or mentions `yarn`, `pnpm` or `corepack` (e.g. a script running `pnpm -r build`). If a tool spawns yarn or pnpm without any hint in `package.json`, force it:
+Setting up corepack adds about 0.2s per call, so it only happens when the call may need yarn or pnpm: always for `yarn`, `pnpm` and `corepack`, and for `node` / `npm` / `npx` when `package.json` has a `packageManager` field or mentions `yarn`, `pnpm` or `corepack` (e.g. a script running `pnpm -r build`). If a tool spawns yarn or pnpm without any hint in `package.json`, force it:
 ```bash
 export NODE_SHIMS_COREPACK=1
 ```
@@ -282,7 +284,7 @@ Other agents (Cursor, Codex, ...) can use the same file: point their rules file 
 
 ## How It Works
 
-1. **Shims intercept commands** - `node`, `npm`, `yarn`, `pnpm` commands are caught by shims
+1. **Shims intercept commands** - `node`, `npm`, `npx`, `yarn`, `pnpm` and `corepack` commands are caught by shims
 2. **Docker containers** - Commands run in isolated Docker containers
 3. **Volume mounting** - Your project is mounted at its real host path (and as `/work`) so `node /Users/…/script.js` works; caches are mounted separately
    - Inside a workspace package (a parent has `pnpm-workspace.yaml`, or a `package.json` with `"workspaces"`), the workspace root is mounted instead, since pnpm links and npm/yarn hoist dependencies into the root `node_modules`. `$HOME` and `/` are never mounted. `NODE_SHIMS_WORKSPACE=0` mounts only the current directory.
@@ -299,7 +301,7 @@ bats test/unit    # shim logic against a fake docker, no daemon needed (seconds)
 bats test/smoke   # real Docker + network: hello-world app through every shim
 ```
 
-The smoke suite runs `node`, `npm`, `npx`, `yarn` and `pnpm` (via `packageManager`), `npx wrangler deploy --dry-run`, `.nvmrc` selection, Docker from npm scripts and `op run` env forwarding. Both suites run on every pull request.
+The smoke suite runs `node`, `npm`, `npx`, `yarn`, `pnpm` and `corepack` (via `packageManager`), `npx wrangler deploy --dry-run`, `.nvmrc` selection, Docker from npm scripts and `op run` env forwarding. Both suites run on every pull request.
 
 ## Maintenance
 

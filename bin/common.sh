@@ -74,7 +74,7 @@ ensure_docker() {
 }
 
 # True if this call may use yarn or pnpm, so corepack has to be set up in the
-# container (~230ms per call). Always for yarn/pnpm. For node/npm/npx, only
+# container (~230ms per call). Always for yarn/pnpm/corepack. For node/npm/npx, only
 # when the project's package.json pins a package manager or its scripts call
 # yarn, pnpm or corepack (e.g. `npm run build` running `pnpm -r build`).
 # NODE_SHIMS_COREPACK=1|0 forces it on or off.
@@ -85,7 +85,7 @@ needs_corepack() {
         return
     fi
     case "$tool" in
-        yarn|pnpm) return 0 ;;
+        yarn|pnpm|corepack) return 0 ;;
     esac
     [[ -f package.json ]] || return 1
     grep -Eq '"packageManager"[[:space:]]*:|(^|[^A-Za-z0-9_@/.-])(yarn|pnpm|pnpx|corepack)([^A-Za-z0-9_-]|$)' package.json
@@ -905,6 +905,21 @@ is_install_command() {
             --help|-h|--version|-v) return 1 ;;
         esac
     done
+    # `corepack use` / `corepack up` run the package manager's install.
+    # `corepack pnpm install` / `corepack yarn add x`: judge the package
+    # manager corepack runs (with any @version stripped).
+    if [[ "$tool" == corepack ]]; then
+        while [[ $# -gt 0 && "$1" == -* ]]; do shift; done
+        [[ $# -gt 0 ]] || return 1
+        case "$1" in
+            use|up) return 0 ;;
+        esac
+        tool="${1%%@*}"
+        shift
+        [[ "$tool" == corepack ]] && return 1
+        is_install_command "$tool" "$@"
+        return
+    fi
     for arg in "$@"; do
         case "$arg" in
             -*) continue ;;

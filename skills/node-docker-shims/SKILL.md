@@ -1,11 +1,11 @@
 ---
 name: node-docker-shims
-description: How node, npm, npx, yarn, pnpm and wrangler work on this machine. Each call runs in a throwaway Docker container through the secure-node-macos shims, and there is no host Node. Load this before running, installing or debugging any JavaScript or TypeScript tooling, and whenever a Node command fails in a surprising way, such as file not found for a path that exists, a dev server that localhost cannot reach, missing env vars, native module or "installed for another platform" errors (esbuild, rollup, workerd), install scripts that did not run, or a wrangler credentials prompt.
+description: How node, npm, npx, yarn, pnpm, corepack and wrangler work on this machine. Each call runs in a throwaway Docker container through the secure-node-macos shims, and there is no host Node. Load this before running, installing or debugging any JavaScript or TypeScript tooling, and whenever a Node command fails in a surprising way, such as file not found for a path that exists, a dev server that localhost cannot reach, missing env vars, native module or "installed for another platform" errors (esbuild, rollup, workerd), install scripts that did not run, or a wrangler credentials prompt.
 ---
 
 # Node runs in Docker on this machine
 
-`node`, `npm`, `npx`, `yarn` and `pnpm` on PATH are bash shims from the secure-node-macos repo (`command -v node` shows where). There is no Node install on the host, on purpose: it keeps malicious npm packages away from the machine. Every call runs `docker run --rm`, so each command gets a fresh container and nothing persists inside it between calls.
+`node`, `npm`, `npx`, `yarn`, `pnpm` and `corepack` on PATH are bash shims from the secure-node-macos repo (`command -v node` shows where). There is no Node install on the host, on purpose: it keeps malicious npm packages away from the machine. Every call runs `docker run --rm`, so each command gets a fresh container and nothing persists inside it between calls.
 
 Full documentation: `README.md` in the repo root, next to the `bin/` directory that holds the shims.
 
@@ -57,6 +57,7 @@ Full documentation: `README.md` in the repo root, next to the `bin/` directory t
 ## yarn and pnpm
 
 - Provided by corepack inside the container, honouring `packageManager` in `package.json`.
+- `corepack` is a shim too, so `corepack use pnpm@9` or `corepack pnpm --version` run in the container (on Node 25+ images, with the pinned corepack the shims install into `~/.cache/node-shims/corepack`).
 - Corepack setup is skipped for `node` / `npm` / `npx` unless `package.json` mentions a package manager. If a tool spawns yarn or pnpm with no hint in `package.json`, run it with `NODE_SHIMS_COREPACK=1`.
 
 ## Wrangler (Cloudflare)
