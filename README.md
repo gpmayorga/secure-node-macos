@@ -142,11 +142,7 @@ export NODE_SHIMS_DOCKER=1
 npm run build   # your script can now run docker build, docker run, etc.
 ```
 
-This mounts `/var/run/docker.sock` into the container and installs the `docker` CLI there, so containers started from npm scripts run on your host Docker daemon. To test:
-
-```bash
-./scripts/test-docker-in-npm.sh
-```
+This mounts `/var/run/docker.sock` into the container and installs the `docker` CLI there, so containers started from npm scripts run on your host Docker daemon. The smoke tests cover this (see [Testing](#testing)).
 
 ### Custom Node.js Image
 Override the default image with the `NODE_IMAGE` environment variable:
@@ -176,12 +172,23 @@ save-exact=true
 4. **Version detection** - Smart detection of Node.js version from various sources
 5. **Automatic setup** - Package managers install automatically when needed
 
+## Testing
+
+Tests use [bats](https://github.com/bats-core/bats-core) (`brew install bats-core` or `apt-get install bats`).
+
+```bash
+bats test/unit    # shim logic against a fake docker, no daemon needed (seconds)
+bats test/smoke   # real Docker + network: hello-world app through every shim
+```
+
+The smoke suite runs `node`, `npm`, `npx`, `yarn` and `pnpm` (via `packageManager`), `npx wrangler deploy --dry-run`, `.nvmrc` selection, Docker from npm scripts and `op run` env forwarding. Both suites run on every pull request.
+
 ## Maintenance
 
 The project includes automated maintenance:
 - **GitHub Action** updates the default Node.js version every 3 months
 - **ShellCheck** ensures script quality and safety
-- **Automatic testing** verifies new versions work correctly
+- **Tests** (unit and Docker smoke) run on every pull request
 
 ## Troubleshooting
 
