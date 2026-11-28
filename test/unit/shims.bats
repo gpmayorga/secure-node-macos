@@ -68,6 +68,18 @@ recorded_image() {
     node --version
     [ "$(recorded_image)" = "node:20-alpine" ]
 
+    echo '{"engines":{"node":"^20.19.0 || >=22.12.0"}}' > package.json
+    node --version
+    [ "$(recorded_image)" = "node:22-alpine" ]
+
+    echo '{"engines":{"node":"~20.x"}}' > package.json
+    node --version
+    [ "$(recorded_image)" = "node:20-alpine" ]
+
+    echo '{"engines":{"node":"*"}}' > package.json
+    node --version
+    [ "$(recorded_image)" = "$default_major" ]
+
     echo 'v18.19.0' > .node-version
     node --version
     [ "$(recorded_image)" = "node:18-alpine" ]

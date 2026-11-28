@@ -110,8 +110,11 @@ resolve_image() {
         local engines_node
         engines_node=$(grep -o '"node"[[:space:]]*:[[:space:]]*"[^"]*"' package.json 2>/dev/null | head -1 | sed 's/.*"node"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || echo "")
         if [[ -n "$engines_node" && "$engines_node" != "null" && "$engines_node" != "undefined" ]]; then
+            # A range such as "^20.19.0 || >=22.12.0" lists alternatives in
+            # rising order: use the first major number of the last one. Only
+            # digits reach the tag, so "^", "~", "x" or "*" can't break it.
             local ver
-            ver=$(echo "$engines_node" | sed -E 's/[<>=!]+//g' | cut -d. -f1)
+            ver=$(printf '%s' "${engines_node##*||}" | grep -Eo '[0-9]+' | head -1)
             [[ -n "$ver" ]] && tag="node:${ver}-alpine"
         fi
     fi
