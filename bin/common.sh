@@ -497,6 +497,164 @@ has_flag() {
     return 1
 }
 
+# Print the value of --profile / --profile=<name> in the wrangler words.
+wrangler_profile_flag() {
+    local prev="" w
+    for w in "$@"; do
+        if [[ "$prev" == "--profile" ]]; then
+            printf '%s\n' "$w"
+            return 0
+        fi
+        case "$w" in
+            --profile=*) printf '%s\n' "${w#--profile=}"; return 0 ;;
+        esac
+        prev="$w"
+    done
+    return 1
+}
+
+# Print the profile bound to a directory (or its nearest bound parent) in
+# wrangler's profiles/directory-bindings.json, the same rule wrangler uses.
+wrangler_profile_for_dir() {
+    local bindings="$1" dir="$2"
+    [[ -f "$bindings" ]] || return 1
+    awk -v dir="$dir" '
+        match($0, /^[[:space:]]*"[^"]+"[[:space:]]*:[[:space:]]*"[^"]+"/) {
+            line = substr($0, RSTART, RLENGTH)
+            sub(/^[[:space:]]*"/, "", line)
+            sub(/"$/, "", line)
+            n = split(line, parts, /"[[:space:]]*:[[:space:]]*"/)
+            if (n != 2) next
+            if ((dir == parts[1] || index(dir, parts[1] "/") == 1) && length(parts[1]) > best) {
+                best = length(parts[1]); found = parts[2]
+            }
+        }
+        END { if (found == "") exit 1; print found }' "$bindings"
+}
+
+# Ask before Cloudflare credentials go into the container. Reads /dev/tty so
+# it works under `npm run`; without a terminal it refuses unless
+# NODE_SHIMS_WRANGLER_YES=1.
+wrangler_confirm_mount() {
+    local what="$1" reply=""
+    is_truthy "${NODE_SHIMS_WRANGLER_YES:-}" && return 0
+    if ! { : </dev/tty; } 2>/dev/null; then
+        echo "node-shims: refusing to mount $what into the container without confirmation (no terminal)." >&2
+        echo "node-shims: set NODE_SHIMS_WRANGLER_YES=1 to allow it." >&2
+        exit 1
+    fi
+    printf 'node-shims: mount %s into the container? [y/N] ' "$what" >/dev/tty
+    read -r reply </dev/tty || true
+    case "$reply" in
+        y|Y|yes|YES) return 0 ;;
+    esac
+    echo "node-shims: aborted, no credentials mounted." >&2
+    exit 1
+}
+
+# Mount wrangler's config dir with only the credentials this call needs.
+# The store keeps wrangler's own layout ($dir/config/<profile>.toml); the
+# container sees $dir with config/ replaced by an empty tmpfs plus the one
+# profile file that applies. Other profiles (e.g. prod) never enter it.
+#   profile: --profile, else the directory binding, else `default`
+#   wrangler login            -> default profile (created if missing)
+#   wrangler auth create <p>  -> <p> (created if missing)
+#   wrangler auth activate/list -> empty stand-in files, no tokens
+#   wrangler logout / auth delete -> the whole store (they delete files)
+prepare_wrangler_config_mount() {
+    local config_dir="$1" debug="$2"
+    local dest=/root/.config/.wrangler
+    local name_re='^[A-Za-z0-9_-]+$'
+
+    if [[ ! -d "$config_dir" ]]; then
+        mkdir -p "$config_dir"
+        chmod 700 "$config_dir" 2>/dev/null || true
+    fi
+    mkdir -p "$config_dir/config"
+    chmod 700 "$config_dir/config" 2>/dev/null || true
+    __SHIM_WRANGLER_DOCKER_ARGS+=(-v "$config_dir":"$dest")
+    (( debug )) && echo "node-shims: wrangler config dir: $config_dir" >&2
+
+    local -a words=(${__SHIM_WRANGLER_WORDS[@]+"${__SHIM_WRANGLER_WORDS[@]}"})
+    local sub
+    sub="$(nonflag_words ${words[@]+"${words[@]}"})"
+
+    case "$sub" in
+        logout|logout\ *|auth\ delete|auth\ delete\ *)
+            wrangler_confirm_mount "ALL wrangler profiles in $config_dir/config (\`wrangler ${sub}\` deletes credential files)"
+            (( debug )) && echo "node-shims: wrangler profiles: all" >&2
+            return 0 ;;
+    esac
+
+    # From here on, config/ in the container starts empty.
+    __SHIM_WRANGLER_DOCKER_ARGS+=(--mount "type=tmpfs,destination=$dest/config")
+
+    local profile="" create=0 stand_in=0 f
+    case "$sub" in
+        auth\ list|auth\ list\ *)
+            for f in "$config_dir"/config/*.toml; do
+                [[ -f "$f" ]] || continue
+                f="$(basename "$f")"
+                __SHIM_WRANGLER_DOCKER_ARGS+=(-v "$config_dir/.empty":"$dest/config/$f:ro")
+            done
+            : > "$config_dir/.empty"
+            (( debug )) && echo "node-shims: wrangler profiles: names only" >&2
+            return 0 ;;
+        auth\ activate\ *)
+            profile="${sub#auth activate }"; profile="${profile%% *}"; stand_in=1 ;;
+        auth\ create\ *)
+            profile="${sub#auth create }"; profile="${profile%% *}"; create=1 ;;
+        login|login\ *)
+            profile=default; create=1
+            echo "node-shims: note: \`wrangler login\` writes the default profile, which applies in every directory without a binding. Use \`wrangler auth create <name>\` for a named profile." >&2 ;;
+        auth|auth\ deactivate|auth\ deactivate\ *|auth\ keyring|auth\ keyring\ *)
+            (( debug )) && echo "node-shims: wrangler profiles: none needed" >&2
+            return 0 ;;
+    esac
+
+    if [[ -z "$profile" ]]; then
+        # An API token in the environment wins over any profile.
+        if [[ -n "${CLOUDFLARE_API_TOKEN:-}" || -n "${CLOUDFLARE_API_KEY:-}" ]]; then
+            (( debug )) && echo "node-shims: wrangler profiles: none (API token in environment)" >&2
+            return 0
+        fi
+        profile="$(wrangler_profile_flag ${words[@]+"${words[@]}"} || true)"
+        if [[ -z "$profile" ]]; then
+            local bindings="$config_dir/profiles/directory-bindings.json"
+            profile="$(wrangler_profile_for_dir "$bindings" "$(pwd)" \
+                || wrangler_profile_for_dir "$bindings" "$(pwd -P)" || true)"
+        fi
+        [[ -n "$profile" ]] || profile=default
+    fi
+
+    if [[ ! "$profile" =~ $name_re ]]; then
+        echo "node-shims: invalid wrangler profile name: $profile" >&2
+        exit 1
+    fi
+
+    local file="$config_dir/config/$profile.toml"
+    if (( stand_in )); then
+        if [[ -f "$file" ]]; then
+            : > "$config_dir/.empty"
+            __SHIM_WRANGLER_DOCKER_ARGS+=(-v "$config_dir/.empty":"$dest/config/$profile.toml:ro")
+        fi
+        (( debug )) && echo "node-shims: wrangler profile: $profile (name only)" >&2
+        return 0
+    fi
+
+    if [[ ! -f "$file" ]] && (( ! create )); then
+        (( debug )) && echo "node-shims: wrangler profile: $profile (not found, nothing mounted)" >&2
+        return 0
+    fi
+    wrangler_confirm_mount "wrangler profile \"$profile\" credentials"
+    # Docker turns a missing bind source into a directory; create the file.
+    [[ -f "$file" ]] || ( umask 077; : > "$file" )
+    chmod 600 "$file" 2>/dev/null || true
+    __SHIM_WRANGLER_DOCKER_ARGS+=(-v "$file":"$dest/config/$profile.toml")
+    (( debug )) && echo "node-shims: wrangler profile: $profile" >&2
+    return 0
+}
+
 # Populates:
 #   __SHIM_WRANGLER_DOCKER_ARGS  extra `docker run` args (mounts, env, ports)
 #   __SHIM_TOOL_ARGS             argv for the tool, with container flags added
@@ -524,16 +682,12 @@ prepare_wrangler() {
     if wrangler_wants_credentials; then
         (( debug )) && echo "node-shims: wrangler credentials: passed" >&2
 
-        # Persistent config dir (OAuth token from `wrangler login`).
+        # Persistent config dir (OAuth tokens from `wrangler login` and
+        # `wrangler auth create`), mounted with only the profile that applies.
         # Wrangler resolves it to $XDG_CONFIG_HOME/.wrangler = /root/.config/.wrangler
         local config_dir="${NODE_SHIMS_WRANGLER_CONFIG_DIR:-$HOME/.config/node-shims/wrangler}"
         if [[ "$config_dir" != "none" ]]; then
-            if [[ ! -d "$config_dir" ]]; then
-                mkdir -p "$config_dir"
-                chmod 700 "$config_dir" 2>/dev/null || true
-            fi
-            __SHIM_WRANGLER_DOCKER_ARGS+=(-v "$config_dir":/root/.config/.wrangler)
-            (( debug )) && echo "node-shims: wrangler config dir: $config_dir" >&2
+            prepare_wrangler_config_mount "$config_dir" "$debug"
         fi
 
         # Forward Cloudflare/wrangler env vars by name (values stay off argv).
@@ -563,13 +717,20 @@ prepare_wrangler() {
     local sub
     sub="$(nonflag_words ${__SHIM_WRANGLER_WORDS[@]+"${__SHIM_WRANGLER_WORDS[@]}"})"
     case "$sub" in
-        login|login\ *)
+        login|login\ *|auth|auth\ *)
             # --device needs no callback server at all.
             has_flag --device "$@" && return 0
             # The OAuth page always redirects to http://localhost:8976 on the
-            # host browser; publish it on loopback only.
+            # host browser; publish it on loopback only. Every `auth`
+            # subcommand gets the port in case it starts an OAuth flow, but
+            # only login and `auth create` accept the callback flags.
             local login_port="${WRANGLER_LOGIN_PORT:-8976}"
-            __SHIM_WRANGLER_DOCKER_ARGS+=(-p "127.0.0.1:${login_port}:${login_port}")
+            # Both loopbacks: Firefox (and others) resolve localhost to ::1 first.
+            __SHIM_WRANGLER_DOCKER_ARGS+=(-p "127.0.0.1:${login_port}:${login_port}" -p "[::1]:${login_port}:${login_port}")
+            case "$sub" in
+                login|login\ *|auth\ create|auth\ create\ *) ;;
+                *) return 0 ;;
+            esac
             if (( inject )); then
                 has_flag --callback-host "$@" || __SHIM_TOOL_ARGS+=(--callback-host=0.0.0.0)
                 has_flag --callback-port "$@" || __SHIM_TOOL_ARGS+=("--callback-port=${login_port}")

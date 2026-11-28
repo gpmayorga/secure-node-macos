@@ -136,9 +136,9 @@ What the shims do for wrangler:
 
 | Issue | What the shim does |
 |---|---|
-| `wrangler login` token lost after each run (`--rm`) | Mounts `~/.config/node-shims/wrangler` as wrangler's config dir, so the login persists (credentialed calls only, see below) |
+| `wrangler login` token lost after each run (`--rm`) | Mounts `~/.config/node-shims/wrangler` as wrangler's config dir, so logins persist, with only the auth profile the call uses (credentialed calls only, see below) |
 | API token auth | Forwards any `CLOUDFLARE_*` and `WRANGLER_*` env vars that are set (by name, values never on argv; credentialed calls only) |
-| OAuth callback unreachable from the browser | Publishes `127.0.0.1:8976` and adds `--callback-host=0.0.0.0 --callback-port=8976 --browser=false` to `wrangler login` |
+| OAuth callback unreachable from the browser | Publishes `127.0.0.1:8976` and `[::1]:8976` for `wrangler login` and every `wrangler auth` command, and adds `--callback-host=0.0.0.0 --callback-port=8976 --browser=false` to `wrangler login` and `wrangler auth create` |
 | `wrangler dev` unreachable on `localhost:8787` | Adds `--ip=0.0.0.0` to `wrangler dev` / `wrangler pages dev` |
 | `workerd` (used by `wrangler dev`) has no Alpine/musl build | Uses `node:<version>-bookworm` instead of `-alpine` for wrangler projects |
 
@@ -175,6 +175,26 @@ export NODE_SHIMS_WRANGLER_CONFIG_DIR=none
 
 **Using `wrangler login`:** run `npx wrangler login` and open the printed URL in your browser. Wrangler's OAuth page always redirects to `http://localhost:8976`, so that host port must be free. Alternatively, `npx wrangler login --device` uses the device code flow and needs no callback port (recent wrangler 4 versions).
 
+**Auth profiles.** Wrangler keeps one credentials file per profile in `config/<name>.toml` and folder bindings in `profiles/directory-bindings.json`. The shim mounts only the profile a call uses, so a dev command never sees the prod token. It picks the profile the same way wrangler does: `--profile <name>`, else the profile bound to the folder or its nearest parent, else `default`. Before mounting a profile it asks `mount wrangler profile "<name>" credentials into the container? [y/N]`. Without a terminal it refuses unless `NODE_SHIMS_WRANGLER_YES=1` is set.
+
+| Command | What the container gets |
+|---|---|
+| `wrangler deploy`, `whoami`, `secret put`, ... | The resolved profile file only (nothing if it does not exist; nothing if `CLOUDFLARE_API_TOKEN` is set) |
+| `wrangler auth create <name>` | `<name>.toml` only (created empty first) |
+| `wrangler login` | `default.toml` only; the shim warns that this is the global fallback profile |
+| `wrangler auth list`, `wrangler auth activate <name>` | Empty stand-in files, so profile names exist but no tokens |
+| `wrangler auth deactivate` | No profile |
+| `wrangler logout`, `wrangler auth delete <name>` | All profiles (they delete files), after the prompt |
+
+To avoid deploying with the wrong account by accident, keep no `default` profile: create named profiles, bind dev folders, and pass prod explicitly.
+
+```bash
+npx wrangler auth create centlabs-dev
+npx wrangler auth create centrifuge-prod
+cd ~/code/my-dev-worker && npx wrangler auth activate centlabs-dev
+npx wrangler deploy --profile centrifuge-prod   # prod only when asked for
+```
+
 **`npm run dev` scripts:** the shim can only add `--ip` when `wrangler` appears in the command line. If wrangler is started from a package.json script, set the listen address in `wrangler.toml` instead:
 ```toml
 [dev]
@@ -188,6 +208,7 @@ Settings:
 | `NODE_SHIMS_WRANGLER` | `auto` | `1` forces wrangler handling on (e.g. monorepo root), `0` turns it off |
 | `NODE_SHIMS_WRANGLER_AUTH` | `auto` | `1` always passes credentials (e.g. `pnpm --filter <pkg> run deploy`), `0` never does |
 | `NODE_SHIMS_WRANGLER_CONFIG_DIR` | `~/.config/node-shims/wrangler` | Host dir for wrangler's config/OAuth token, or `none` |
+| `NODE_SHIMS_WRANGLER_YES` | unset | `1` mounts the profile without asking (needed when there is no terminal) |
 | `NODE_SHIMS_WRANGLER_FLAGS` | on | `0` stops the shim from adding `--callback-host`, `--ip` and similar flags (wrangler 3 does not know `--callback-host`) |
 | `WRANGLER_LOGIN_PORT` | `8976` | Login callback port |
 
