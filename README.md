@@ -253,6 +253,7 @@ save-exact=true
 1. **Shims intercept commands** - `node`, `npm`, `yarn`, `pnpm` commands are caught by shims
 2. **Docker containers** - Commands run in isolated Docker containers
 3. **Volume mounting** - Your project is mounted at its real host path (and as `/work`) so `node /Users/…/script.js` works; caches are mounted separately
+   - Inside a workspace package (a parent has `pnpm-workspace.yaml`, or a `package.json` with `"workspaces"`), the workspace root is mounted instead, since pnpm links and npm/yarn hoist dependencies into the root `node_modules`. `$HOME` and `/` are never mounted. `NODE_SHIMS_WORKSPACE=0` mounts only the current directory.
 4. **Version detection** - Smart detection of Node.js version from various sources
 5. **Automatic setup** - Package managers install automatically when needed
 

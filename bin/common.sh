@@ -103,19 +103,60 @@ use_docker_socket() {
 # inside the container even when the file is under $PWD. /work stays as an
 # alias for anything that still assumes that layout.
 prepare_project_mounts() {
-    local logical physical
+    local logical physical root logical_root
     logical="$(pwd)"
     physical="$(pwd -P)"
+    # Inside a workspace package, mount the workspace root: pnpm links
+    # node_modules/<dep> to <root>/node_modules/.pnpm, and npm/yarn hoist
+    # deps to <root>/node_modules, so the package dir alone is not enough.
+    root="$(find_workspace_root "$physical" || true)"
+    [[ -n "$root" ]] || root="$physical"
+    # Same root on the logical path (macOS /tmp -> /private/tmp), when the
+    # logical cwd ends with the same path below the root.
+    logical_root="$root"
+    if [[ "$logical" != "$physical" ]]; then
+        local rel="${physical#"$root"}"
+        if [[ -z "$rel" ]]; then
+            logical_root="$logical"
+        elif [[ "$logical" == *"$rel" ]]; then
+            logical_root="${logical%"$rel"}"
+        fi
+    fi
     __SHIM_PROJECT_MOUNTS=(
-        -v "$physical":"$physical"
+        -v "$root":"$root"
         -v "$physical":/work
         -w "$logical"
         -e "INIT_CWD=$logical"
     )
-    if [[ "$logical" != "$physical" ]]; then
-        __SHIM_PROJECT_MOUNTS+=(-v "$physical":"$logical")
+    if [[ "$logical_root" != "$root" ]]; then
+        __SHIM_PROJECT_MOUNTS+=(-v "$root":"$logical_root")
+    fi
+    if [[ "$root" != "$physical" ]] && is_truthy "${NODE_SHIMS_DEBUG:-}"; then
+        echo "node-shims: mounting workspace root: $root" >&2
     fi
     __SHIM_WORKDIR_PHYSICAL="$physical"
+    __SHIM_MOUNT_ROOT_PHYSICAL="$root"
+}
+
+# Print the nearest parent of $1 (physical path) that is a JS workspace
+# root: has pnpm-workspace.yaml, or a package.json with "workspaces".
+# Stops below $HOME and /, so neither is ever mounted. NODE_SHIMS_WORKSPACE=0
+# turns this off.
+find_workspace_root() {
+    local dir="$1" home_physical
+    if [[ -n "${NODE_SHIMS_WORKSPACE:-}" ]] && ! is_truthy "$NODE_SHIMS_WORKSPACE"; then
+        return 1
+    fi
+    home_physical="$(cd "$HOME" 2>/dev/null && pwd -P || echo "$HOME")"
+    while [[ -n "$dir" && "$dir" != "/" && "$dir" != "$home_physical" ]]; do
+        if [[ -f "$dir/pnpm-workspace.yaml" ]] \
+            || { [[ -f "$dir/package.json" ]] && grep -q '"workspaces"[[:space:]]*:' "$dir/package.json"; }; then
+            printf '%s\n' "$dir"
+            return 0
+        fi
+        dir="$(dirname "$dir")"
+    done
+    return 1
 }
 
 # Bind extra absolute argv paths that exist on the host but sit outside $PWD.
@@ -773,7 +814,7 @@ docker_exec() {
     ensure_docker
     local img; img="$(resolve_image)"
     prepare_project_mounts
-    append_extra_host_mounts "$__SHIM_WORKDIR_PHYSICAL" "$@"
+    append_extra_host_mounts "$__SHIM_MOUNT_ROOT_PHYSICAL" "$@"
     append_op_run_env
     prepare_wrangler "$tool" "$@"
     # workerd (wrangler dev) is glibc-only; use the Debian variant of the same
