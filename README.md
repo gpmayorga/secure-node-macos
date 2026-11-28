@@ -168,6 +168,7 @@ Current wrangler 4 needs Node 22 or newer. The default image (Node 26) is fine; 
 | `npm run deploy` / `pnpm deploy-prod` where the root `package.json` script calls wrangler | yes |
 | `wrangler dev` / `wrangler pages dev` (local), `wrangler types`, `wrangler build`, `wrangler deploy --dry-run`, `wrangler versions upload --dry-run`, `wrangler pages functions build`, `--help`, `--version` | no |
 | `npm install`, `npm i -D wrangler`, `pnpm add wrangler`, any call that does not run wrangler | no |
+| pnpm / yarn built-ins such as `pnpm deploy`, `pnpm install`, `yarn add`, even when a script has the same name (use `pnpm run deploy` for the script) | no |
 
 The list of commands that get no credentials is short on purpose: it holds only commands that work while logged out. Every other wrangler command gets credentials, so a command missing from the list still works.
 
