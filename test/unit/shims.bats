@@ -399,6 +399,23 @@ require_detachable_tty() {
     done
 }
 
+@test "wrangler scripts are found in a minified package.json" {
+    printf 'name = "w"\n' > wrangler.toml
+    # One line, a nested object before "scripts", and a script with braces.
+    printf '%s\n' '{"name":"w","config":{"a":{"b":1}},"scripts":{"lint":"node -e \"if(1){}\"","build":"node build.js","deploy":"wrangler deploy --env prod"},"devDependencies":{"wrangler":"^4.0.0"}}' > package.json
+    add_profile default
+    export NODE_SHIMS_WRANGLER_YES=1 CLOUDFLARE_ACCOUNT_ID=dummy-account-id
+
+    run_shim "pnpm run deploy"
+    docker_args_have -e CLOUDFLARE_ACCOUNT_ID
+    profile_mounted default
+
+    run_shim "npm run build"
+    no_wrangler_credentials
+    run_shim "npm run lint"
+    no_wrangler_credentials
+}
+
 @test "pnpm and yarn built-ins never get credentials, even when a script has the same name" {
     # Built-ins win over scripts of the same name, and several of them
     # install dependencies, so their lifecycle scripts must not see a token.
