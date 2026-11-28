@@ -55,7 +55,13 @@ exec_local() {
         exit 1
     fi
     
-    # Execute the local tool
+    # Execute the local tool. Explicit local mode also gets the
+    # node_modules platform check; the host-node fallback for scripts
+    # outside $PWD does not use the project's packages, so it skips it.
+    if [[ "${__SHIM_PLATFORM_GUARD:-0}" == 1 ]]; then
+        __SHIM_TOOL_ARGV=("$@")
+        run_with_platform_marker "$tool" "$(host_platform)" "$tool_path" "$@"
+    fi
     exec "$tool_path" "$@"
 }
 
@@ -254,6 +260,98 @@ needs_host_node() {
     return 1
 }
 
+# ---------------------------------------------------------------------------
+# node_modules platform marker
+#
+# Native packages (esbuild, rollup, workerd, swc, ...) only load on the
+# platform that installed them: macOS vs Linux, and musl (alpine) vs glibc
+# (debian). Install commands record that platform in
+# node_modules/.node-shims-platform, and later runs warn when it differs from
+# the platform about to execute, instead of failing with an obscure
+# native-binary error.
+# ---------------------------------------------------------------------------
+NODE_SHIMS_PLATFORM_MARKER="node_modules/.node-shims-platform"
+
+normalized_arch() {
+    case "$(uname -m)" in
+        arm64|aarch64) echo arm64 ;;
+        x86_64|amd64) echo x64 ;;
+        *) uname -m ;;
+    esac
+}
+
+# Platform a container from this image runs, e.g. linux-arm64-musl
+container_platform() {
+    local libc=glibc
+    [[ "$1" == *alpine* ]] && libc=musl
+    echo "linux-$(normalized_arch)-${libc}"
+}
+
+# Platform of a host (local mode) run, e.g. darwin-arm64
+host_platform() {
+    echo "$(uname -s | tr '[:upper:]' '[:lower:]')-$(normalized_arch)"
+}
+
+# True if the command installs or changes node_modules.
+is_install_command() {
+    local tool="$1" sub="" arg
+    shift
+    for arg in "$@"; do
+        case "$arg" in
+            -*) continue ;;
+        esac
+        sub="$arg"
+        break
+    done
+    case "$tool" in
+        npm)
+            case "$sub" in
+                install|i|in|add|ci|clean-install|ic|install-clean|update|up|upgrade|uninstall|un|remove|rm|r|dedupe|ddp|rebuild|rb) return 0 ;;
+            esac ;;
+        pnpm)
+            case "$sub" in
+                install|i|add|update|up|upgrade|remove|rm|uninstall|un|rebuild|rb|import) return 0 ;;
+            esac ;;
+        yarn)
+            case "$sub" in
+                ""|install|add|upgrade|up|remove) return 0 ;;
+            esac ;;
+    esac
+    return 1
+}
+
+warn_platform_mismatch() {
+    local target="$1" recorded
+    is_truthy "${NODE_SHIMS_NO_PLATFORM_WARNING:-}" && return 0
+    [[ -f "$NODE_SHIMS_PLATFORM_MARKER" ]] || return 0
+    recorded="$(head -n 1 "$NODE_SHIMS_PLATFORM_MARKER" 2>/dev/null || true)"
+    [[ -n "$recorded" && "$recorded" != "$target" ]] || return 0
+    echo "⚠️  node-shims: node_modules was installed for $recorded, but this run is $target." >&2
+    echo "   Native packages (esbuild, rollup, workerd, swc, ...) may fail to load." >&2
+    echo "   Fix: rm -rf node_modules, then reinstall the same way you run the project." >&2
+}
+
+record_platform() {
+    [[ -d node_modules ]] || return 0
+    printf '%s\n' "$1" > "$NODE_SHIMS_PLATFORM_MARKER" 2>/dev/null || true
+}
+
+# Run "$@" (the full command). Install commands run as a child so the marker
+# can be written afterwards; everything else is exec'd so signals reach the
+# process directly, as before.
+run_with_platform_marker() {
+    local tool="$1" platform="$2"
+    shift 2
+    warn_platform_mismatch "$platform"
+    if is_install_command "$tool" "${__SHIM_TOOL_ARGV[@]+"${__SHIM_TOOL_ARGV[@]}"}"; then
+        local rc=0
+        "$@" || rc=$?
+        record_platform "$platform"
+        exit "$rc"
+    fi
+    exec "$@"
+}
+
 # Check if command should map ports (for dev servers)
 should_map_ports() {
     local cmd="$*"
@@ -270,6 +368,7 @@ docker_exec() {
 
     # Check if local override is enabled
     if use_local_override; then
+        __SHIM_PLATFORM_GUARD=1
         exec_local "$tool" "$@"
     fi
 
@@ -353,5 +452,7 @@ docker_exec() {
     if use_docker_socket; then
         setup="$setup; apk add --no-cache docker-cli >/dev/null 2>&1 || true"
     fi
-    exec docker "${args[@]}" "$img" sh -c "$setup; exec \"\$@\"" -- "$tool" "$@"
+    __SHIM_TOOL_ARGV=("$@")
+    run_with_platform_marker "$tool" "$(container_platform "$img")" \
+        docker "${args[@]}" "$img" sh -c "$setup; exec \"\$@\"" -- "$tool" "$@"
 }
