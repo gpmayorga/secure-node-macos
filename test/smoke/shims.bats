@@ -32,7 +32,7 @@ set_package_manager() {
     local default_major
     default_major="$(grep -o 'node:[0-9]*-alpine' "$SHIMS_DIR/common.sh" | head -1 | tr -dc '0-9')"
 
-    run node --version
+    run --separate-stderr node --version
     [ "$status" -eq 0 ]
     [[ "$output" == "v${default_major}."* ]]
 }
@@ -41,7 +41,7 @@ set_package_manager() {
     make_project hello
     echo 22 > .nvmrc
 
-    run node --version
+    run --separate-stderr node --version
     [ "$status" -eq 0 ]
     [[ "$output" == v22.* ]]
 }
