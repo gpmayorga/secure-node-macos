@@ -285,6 +285,18 @@ The project is bind-mounted at the same path as on the host, so absolute paths *
 export NODE_SHIMS_MODE=local
 ```
 
+### "node_modules was installed for ..." warning
+Packages with native binaries (esbuild, Rollup, workerd, SWC, ...) only load on the platform that installed them: macOS vs Linux, and Alpine (`musl`) vs Debian (`glibc`) images. Install commands (`npm install`/`ci`/`add`, `pnpm install`/`add`, `yarn`, ...) record the platform in `node_modules/.node-shims-platform`. Later runs compare it with the platform about to execute, in the container or with `NODE_SHIMS_MODE=local`, and print a warning on a mismatch instead of failing later with an obscure native-module error.
+
+Typical causes: switching a project between `NODE_SHIMS_MODE=local` and the container, or between an Alpine and a Debian image (wrangler projects use Debian). The fix is a clean reinstall in the mode you run the project in:
+```bash
+rm -rf node_modules && npm install
+```
+To silence the warning:
+```bash
+export NODE_SHIMS_NO_PLATFORM_WARNING=1
+```
+
 ### `op run` environment is dropped
 `docker run` does not inherit the host environment. When the shim’s **direct parent** is `op run` (1Password CLI), exported host vars are forwarded with `-e NAME` so a FIFO `.env` that `op` already resolved reaches the container. `PATH` / `HOME` / `TMPDIR` and similar are not forwarded (they would break the image).
 
