@@ -437,13 +437,33 @@ wrangler_words_from_argv() {
     __SHIM_WRANGLER_FROM_ARGV=1
 }
 
-# Print the body of package.json script $1. Best effort with sed: a
-# minified package.json or a body with `}` before the script prints nothing,
-# and the caller then treats the call as not running wrangler.
+# Print package.json with a line break after every `{` and `,` and before
+# every `}` outside strings, so the line-based parsing below also works on
+# minified files. No JSON parser is needed on the host (POSIX awk only).
+package_json_lines() {
+    awk '{
+        out = ""
+        for (i = 1; i <= length($0); i++) {
+            c = substr($0, i, 1)
+            if (esc) { esc = 0 }
+            else if (instr) { if (c == "\\") esc = 1; else if (c == "\"") instr = 0 }
+            else if (c == "\"") { instr = 1 }
+            else if (c == "{" || c == ",") { out = out c "\n"; continue }
+            else if (c == "}") { out = out "\n" c; continue }
+            out = out c
+        }
+        print out
+    }' package.json 2>/dev/null
+}
+
+# Print the body of package.json script $1. Best effort: a body that cannot
+# be read prints nothing, and the caller then treats the call as not running
+# wrangler.
 package_script_body() {
     local name_re
     name_re="$(printf '%s' "$1" | sed 's/[][\.*^$+?(){}|/]/\\&/g')"
-    sed -n '/"scripts"[[:space:]]*:/,/}/p' package.json 2>/dev/null \
+    package_json_lines \
+        | sed -n '/"scripts"[[:space:]]*:/,/^[[:space:]]*}/p' \
         | grep -E "^[[:space:]]*\"${name_re}\"[[:space:]]*:" \
         | head -1 \
         | sed -E 's/^[^:]*:[[:space:]]*"(.*)"[[:space:]]*,?[[:space:]]*$/\1/'
