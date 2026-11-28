@@ -121,6 +121,22 @@ npm run dev      # Port 3000, 5173, 8080, 4200, etc. automatically mapped
 yarn start       # Your dev server will be accessible on localhost
 ```
 
+The shims map ports only when the command looks like a dev server (`dev`, `start`, `serve`, `vite`, `next`, ...).
+
+### Interactive shell
+`node-shell` opens a shell in the same container setup, in the current project. It always maps the dev ports, so a dev server started from inside it is reachable on `localhost`:
+```bash
+node-shell
+# inside the container
+yarn dev
+```
+
+`docker run` fails if one of those host ports is already in use, for example when a dev server or a second `node-shell` is already running. Opt out of port mapping for that shell, or pick other ports:
+```bash
+NODE_SHELL_NO_PORTS=1 node-shell
+DOCKER_NODE_PORTS="3100,5273" node-shell
+```
+
 ## Configuration
 
 ### Custom Ports
