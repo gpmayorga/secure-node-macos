@@ -62,7 +62,7 @@ This script will:
 ./scripts/install-shims.sh
 ```
 This script will:
-- Add the `bin/` directory to your PATH
+- Add the `bin/` directory to your PATH (safe to rerun; run from a new clone or worktree, it repoints the existing PATH line instead of adding another)
 - Create necessary cache directories
 - Test Docker connectivity
 - Provide clear setup instructions
