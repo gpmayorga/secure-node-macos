@@ -28,7 +28,7 @@ Use at your own risk.
 - **Supply chain protection** - Malicious packages cannot access your host system
 
 ### 🚀 **Automatic Package Manager Installation**
-- **yarn & pnpm via corepack** - Automatically uses the correct version via corepack
+- **yarn & pnpm via corepack** - Automatically uses the correct version via corepack (on Node 25+ images, which no longer bundle corepack, a pinned copy is installed once into `~/.cache/node-shims/corepack`)
 - **Version-aware** - Respects `packageManager` field in package.json
 - **No manual setup** - Just run `yarn` or `pnpm` and they'll be ready
 - **Persistent caches** - Package manager caches are mounted and persist between runs
@@ -37,7 +37,7 @@ Use at your own risk.
 - **`.nvmrc` support** - Automatically uses Node.js version specified in `.nvmrc`
 - **`.node-version` support** - Also supports `.node-version` files
 - **`package.json` engines** - Falls back to `engines.node` field if present
-- **Latest LTS default** - Uses latest LTS version when no version is specified
+- **Latest LTS default** - Uses the latest LTS version (currently Node 26) when no version is specified
 - **Auto-updating** - GitHub Action updates default version every 3 months
 
 ### 🛠 **Development-Friendly**
@@ -142,7 +142,7 @@ What the shims do for wrangler:
 | `wrangler dev` unreachable on `localhost:8787` | Adds `--ip=0.0.0.0` to `wrangler dev` / `wrangler pages dev` |
 | `workerd` (used by `wrangler dev`) has no Alpine/musl build | Uses `node:<version>-bookworm` instead of `-alpine` for wrangler projects |
 
-Current wrangler 4 needs Node 22 or newer. Add `22` to `.nvmrc` in wrangler projects if the default image is older.
+Current wrangler 4 needs Node 22 or newer. The default image (Node 26) is fine; only projects that pin an older version in `.nvmrc`, `.node-version` or `engines` need to raise it.
 
 **Recommended: scoped API token instead of `wrangler login`.** `wrangler login` stores a broad OAuth refresh token on disk. A scoped [API token](https://dash.cloudflare.com/profile/api-tokens) kept in 1Password gives any compromised dependency less to steal:
 ```bash
@@ -194,7 +194,13 @@ This mounts `/var/run/docker.sock` into the container and installs the `docker` 
 ### Custom Node.js Image
 Override the default image with the `NODE_IMAGE` environment variable:
 ```bash
-export NODE_IMAGE="node:18-alpine"
+export NODE_IMAGE="node:24-alpine"
+```
+
+### Corepack Version
+Node 25 and newer images do not include corepack. For those, the shims install `corepack@0.36.0` once into `~/.cache/node-shims/corepack` and reuse it. To pin a different version:
+```bash
+export NODE_SHIMS_COREPACK_VERSION=0.36.0
 ```
 
 ### npm Configuration

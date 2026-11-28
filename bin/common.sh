@@ -67,7 +67,7 @@ ensure_docker() {
 
 # Resolve Node.js image tag from various sources
 resolve_image() {
-    local tag="node:20-alpine"
+    local tag="node:26-alpine"
     
     # Check .nvmrc file
     if [[ -f .nvmrc ]]; then
@@ -437,6 +437,10 @@ docker_exec() {
     if use_wrangler_support "$@" && [[ -z "${NODE_IMAGE:-}" && "$img" == *-alpine ]]; then
         img="${img%-alpine}-bookworm"
     fi
+    # Node 25+ images no longer bundle corepack. A pinned copy is installed
+    # once into this host dir and reused (it is plain JS, any Node works).
+    local corepack_dir="$HOME/.cache/node-shims/corepack"
+    mkdir -p "$corepack_dir"
     # ${arr[@]+...} keeps empty arrays safe under `set -u` on macOS bash 3.2.
     local -a args=(run --rm
         "${__SHIM_PROJECT_MOUNTS[@]}"
@@ -447,6 +451,7 @@ docker_exec() {
         -v "$HOME/.cache/pnpm":/root/.cache/pnpm
         -v "$HOME/.cache/yarn":/root/.cache/yarn
         -v "$HOME/.config/pnpm":/root/.config/pnpm
+        -v "$corepack_dir":/opt/node-shims-corepack
         -e COREPACK_ENABLE_STRICT=0
         -e COREPACK_ENABLE_NETWORK=1
     )
@@ -489,8 +494,12 @@ docker_exec() {
         done
     fi
 
-    # Enable corepack; if Docker socket is mounted, install docker-cli so npm scripts can run docker
-    local setup="corepack enable >/dev/null 2>&1 || true; corepack install >/dev/null 2>&1 || true"
+    # Enable corepack (installing the pinned copy first on images without it);
+    # if Docker socket is mounted, install docker-cli so npm scripts can run docker
+    local corepack_version="${NODE_SHIMS_COREPACK_VERSION:-0.36.0}"
+    [[ "$corepack_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || corepack_version=0.36.0
+    local setup="if ! command -v corepack >/dev/null 2>&1; then export PATH=/opt/node-shims-corepack/bin:\$PATH; [ \"\$(cat /opt/node-shims-corepack/.version 2>/dev/null)\" = '$corepack_version' ] || { npm install -g --prefix /opt/node-shims-corepack --no-audit --no-fund 'corepack@$corepack_version' >/dev/null 2>&1 && echo '$corepack_version' > /opt/node-shims-corepack/.version; } || true; fi"
+    setup="$setup; corepack enable >/dev/null 2>&1 || true; corepack install >/dev/null 2>&1 || true"
     if use_docker_socket; then
         setup="$setup; if command -v apk >/dev/null 2>&1; then apk add --no-cache docker-cli >/dev/null 2>&1 || true; elif command -v apt-get >/dev/null 2>&1; then (apt-get update -qq && apt-get install -y -qq --no-install-recommends docker.io) >/dev/null 2>&1 || true; fi"
     fi
