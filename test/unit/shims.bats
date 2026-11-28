@@ -24,7 +24,7 @@ EOF
     export HOME="$STUB_DIR/home"
     mkdir -p "$HOME"
     export PATH="$SHIMS_DIR:$STUB_DIR:/usr/bin:/bin"
-    unset NODE_IMAGE NODE_SHIMS_MODE NODE_SHIMS_LOCAL NODE_SHIMS_DOCKER DOCKER_NODE_PORTS
+    unset NODE_IMAGE NODE_SHIMS_MODE NODE_SHIMS_LOCAL NODE_SHIMS_DOCKER DOCKER_NODE_PORTS NODE_SHELL_NO_PORTS
 
     make_project
 }
@@ -210,7 +210,16 @@ EOF
 }
 
 @test "node-shell maps the same default dev ports as the tool shims" {
-    node-shell dev
+    node-shell
     docker_args_have -p "5173:5173"
     docker_args_have -p "8787:8787"
+}
+
+@test "node-shell honours DOCKER_NODE_PORTS and NODE_SHELL_NO_PORTS" {
+    DOCKER_NODE_PORTS="4321" node-shell
+    docker_args_have -p "4321:4321"
+    run ! docker_args_have -p "3000:3000"
+
+    NODE_SHELL_NO_PORTS=1 node-shell
+    run ! grep -qx -- '-p' "$DOCKER_ARGS_LOG"
 }

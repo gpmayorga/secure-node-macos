@@ -18,8 +18,11 @@ declare -a args=(run --rm -it
     "${__SHIM_TOOL_MOUNTS[@]}"
 )
 
-# Map common dev ports so shell can run dev servers directly
-if should_map_ports "${*:-}"; then
+# Map the dev ports so dev servers started from the shell are reachable.
+# The shell takes no command, so ports are always mapped (unlike docker_exec,
+# which only maps them for dev-server commands). docker run fails if a host
+# port is taken (e.g. a second node-shell), so NODE_SHELL_NO_PORTS=1 opts out.
+if [[ "${NODE_SHELL_NO_PORTS:-}" != 1 ]]; then
     IFS=',' read -ra ports <<< "${DOCKER_NODE_PORTS:-$NODE_SHIMS_DEFAULT_PORTS}"
     for p in "${ports[@]}"; do args+=(-p "$p:$p"); done
 fi
