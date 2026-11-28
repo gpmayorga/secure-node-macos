@@ -399,6 +399,67 @@ require_detachable_tty() {
     done
 }
 
+@test "pnpm and yarn built-ins never get credentials, even when a script has the same name" {
+    # Built-ins win over scripts of the same name, and several of them
+    # install dependencies, so their lifecycle scripts must not see a token.
+    printf 'name = "w"\n' > wrangler.toml
+    cat > package.json <<'JSON'
+{
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "install": "wrangler deploy",
+    "add": "wrangler deploy",
+    "update": "wrangler deploy",
+    "up": "wrangler deploy",
+    "rebuild": "wrangler deploy",
+    "dedupe": "wrangler deploy",
+    "import": "wrangler deploy",
+    "link": "wrangler deploy",
+    "remove": "wrangler deploy",
+    "pack": "wrangler deploy",
+    "publish": "wrangler deploy",
+    "exec": "wrangler deploy",
+    "dlx": "wrangler deploy"
+  }
+}
+JSON
+    add_profile default
+    export NODE_SHIMS_WRANGLER_YES=1
+    export CLOUDFLARE_API_TOKEN=dummy-api-token CLOUDFLARE_ACCOUNT_ID=dummy-account-id
+    local calls=(
+        "pnpm deploy ../out"
+        "pnpm --prod deploy ../out"
+        "pnpm install"
+        "pnpm add left-pad"
+        "pnpm update"
+        "pnpm up"
+        "pnpm rebuild"
+        "pnpm dedupe"
+        "pnpm import"
+        "pnpm link ../lib"
+        "pnpm remove left-pad"
+        "pnpm pack"
+        "pnpm publish"
+        "yarn install"
+        "yarn add left-pad"
+        "yarn up"
+        "yarn rebuild"
+        "yarn dedupe"
+        "yarn link ../lib"
+        "yarn remove left-pad"
+        "yarn pack"
+    )
+    local call
+    for call in "${calls[@]}"; do
+        run_shim "$call"
+        no_wrangler_credentials || { echo "credentials leaked to: $call"; return 1; }
+    done
+
+    # `run` still reaches the script, so it still gets them.
+    run_shim "pnpm run deploy"
+    docker_args_have -e CLOUDFLARE_API_TOKEN
+}
+
 @test "wrangler dev gets credentials when the config or flags need Cloudflare" {
     export NODE_SHIMS_WRANGLER_YES=1 CLOUDFLARE_ACCOUNT_ID=dummy-account-id
     local configs=(

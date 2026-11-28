@@ -449,6 +449,19 @@ package_script_body() {
         | sed -E 's/^[^:]*:[[:space:]]*"(.*)"[[:space:]]*,?[[:space:]]*$/\1/'
 }
 
+# True if `pnpm <name>` or `yarn <name>` runs a pnpm or yarn (classic or berry) built-in.
+# Built-ins win over a package.json script of the same name, and several of
+# them install dependencies (`pnpm deploy`, `pnpm install`, `yarn add`), so
+# they must never be read as a wrangler script. Listing a name that is not a
+# built-in only withholds credentials; missing one would leak them.
+is_package_manager_builtin() {
+    case "$1" in
+        add|audit|autoclean|bin|c|cache|cat-file|cat-index|check|ci|clean|completion|config|constraints|create|dedupe|deploy|dlx|docs|doctor|env|exec|explain|fetch|find-hash|generate-lock-entry|get|global|help|home|i|ignored-builds|import|info|init|install|install-test|it|licenses|link|list|ln|login|logout|ls|node|npm|outdated|owner|pack|patch|patch-commit|patch-remove|plugin|policies|prune|publish|rb|rebuild|recursive|remove|repo|rm|root|sbom|search|server|set|setup|stage|store|tag|team|un|uninstall|unlink|unplug|up|update|upgrade|upgrade-interactive|version|versions|view|whoami|why|workspace|workspaces|x|approve-builds|self-update)
+            return 0 ;;
+    esac
+    return 1
+}
+
 # `npm run deploy` / `pnpm dev` / `yarn deploy`: wrangler is not in argv,
 # so read the script body instead. Sets __SHIM_WRANGLER_WORDS like the argv
 # check and __SHIM_WRANGLER_MULTI=1 if the script runs wrangler more than once.
@@ -489,6 +502,7 @@ wrangler_words_from_script() {
         *)
             # pnpm and yarn run a script given by bare name; npm does not.
             [[ "$tool" == npm ]] && return 1
+            is_package_manager_builtin "${a[i]}" && return 1
             name="${a[i]}"
             ;;
     esac
