@@ -287,7 +287,10 @@ docker_exec() {
     local corepack_dir="$HOME/.cache/node-shims/corepack"
     # Yarn 2+ keeps its package cache here and PnP resolves into it at
     # runtime, so it must outlive the container that ran `yarn install`.
-    mkdir -p "$corepack_dir" "$HOME/.yarn/berry"
+    # It is mounted at the host path, not /root: .pnp.cjs records the cache
+    # location, and the same project must keep working under NODE_SHIMS_LOCAL.
+    local yarn_global="$HOME/.yarn/berry"
+    mkdir -p "$corepack_dir" "$yarn_global"
     local -a args=(run --rm
         "${__SHIM_PROJECT_MOUNTS[@]}"
         "${__SHIM_OP_ENV[@]}"
@@ -295,7 +298,8 @@ docker_exec() {
         -v "$HOME/.npmrc":/root/.npmrc
         -v "$HOME/.cache/pnpm":/root/.cache/pnpm
         -v "$HOME/.cache/yarn":/root/.cache/yarn
-        -v "$HOME/.yarn/berry":/root/.yarn/berry
+        -v "$yarn_global":"$yarn_global"
+        -e YARN_GLOBAL_FOLDER="$yarn_global"
         -v "$HOME/.config/pnpm":/root/.config/pnpm
         -v "$corepack_dir":/opt/node-shims-corepack
         -e COREPACK_ENABLE_STRICT=0

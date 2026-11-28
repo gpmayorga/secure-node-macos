@@ -18,7 +18,8 @@ declare -a args=(run --rm -it \
     -v "$HOME/.npmrc":/root/.npmrc \
     -v "$HOME/.cache/pnpm":/root/.cache/pnpm \
     -v "$HOME/.cache/yarn":/root/.cache/yarn \
-    -v "$HOME/.yarn/berry":/root/.yarn/berry \
+    -v "$HOME/.yarn/berry":"$HOME/.yarn/berry" \
+    -e YARN_GLOBAL_FOLDER="$HOME/.yarn/berry" \
     -v "$HOME/.config/pnpm":/root/.config/pnpm \
     -e COREPACK_ENABLE_STRICT=0 \
     -e COREPACK_ENABLE_NETWORK=1
