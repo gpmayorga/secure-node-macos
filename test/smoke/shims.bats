@@ -130,6 +130,30 @@ set_package_manager() {
     [[ "$output" == *"Hello, world!"* ]]
 }
 
+@test "pnpm shares one store between NODE_SHIMS_LOCAL and Docker" {
+    local host_path="${PATH#"$SHIMS_DIR:"}"
+    PATH="$host_path" command -v npm >/dev/null || skip "no host npm outside the shims"
+    make_project hello
+    set_package_manager "pnpm@$PNPM_VERSION"
+
+    local host_pnpm
+    host_pnpm="$(mktemp -d)"
+    PATH="$host_path" npm install --prefix "$host_pnpm" --no-audit --no-fund "pnpm@$PNPM_VERSION"
+    PATH="$PATH:$host_pnpm/node_modules/.bin" NODE_SHIMS_LOCAL=1 pnpm install
+    rm -rf "$host_pnpm"
+
+    # Without node_modules the install must come from the store; --offline
+    # proves the container reads the one the host filled.
+    rm -rf node_modules
+    run pnpm install --offline --frozen-lockfile
+    [ "$status" -eq 0 ]
+    [ ! -e .pnpm-store ]
+
+    run pnpm start
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Hello, world!"* ]]
+}
+
 @test "npx wrangler builds a worker without logging in" {
     make_project hello-worker
 

@@ -93,6 +93,20 @@ resolve_image() {
     echo "${NODE_IMAGE:-$tag}"
 }
 
+# The store a host pnpm would use by default, so NODE_SHIMS_LOCAL and the
+# container agree on the storeDir pnpm records in node_modules/.modules.yaml.
+pnpm_store_dir() {
+    if [[ -n "${PNPM_HOME:-}" ]]; then
+        echo "$PNPM_HOME/store"
+    elif [[ -n "${XDG_DATA_HOME:-}" ]]; then
+        echo "$XDG_DATA_HOME/pnpm/store"
+    elif [[ "$(uname -s)" == "Darwin" ]]; then
+        echo "$HOME/Library/pnpm/store"
+    else
+        echo "$HOME/.local/share/pnpm/store"
+    fi
+}
+
 # Check if Docker socket should be mounted (for npm scripts that run docker)
 use_docker_socket() {
     [[ "${NODE_SHIMS_DOCKER:-}" == "1" ]] || is_truthy "${NODE_SHIMS_DOCKER:-}"
@@ -290,7 +304,10 @@ docker_exec() {
     # It is mounted at the host path, not /root: .pnp.cjs records the cache
     # location, and the same project must keep working under NODE_SHIMS_LOCAL.
     local yarn_global="$HOME/.yarn/berry"
-    mkdir -p "$corepack_dir" "$yarn_global"
+    # Same reasoning for the pnpm store. Without it pnpm also falls back to a
+    # .pnpm-store/ inside each project, as /root is on another filesystem.
+    local pnpm_store; pnpm_store="$(pnpm_store_dir)"
+    mkdir -p "$corepack_dir" "$yarn_global" "$pnpm_store"
     local -a args=(run --rm
         "${__SHIM_PROJECT_MOUNTS[@]}"
         "${__SHIM_OP_ENV[@]}"
@@ -300,12 +317,20 @@ docker_exec() {
         -v "$HOME/.cache/yarn":/root/.cache/yarn
         -v "$yarn_global":"$yarn_global"
         -e YARN_GLOBAL_FOLDER="$yarn_global"
+        -v "$pnpm_store":"$pnpm_store"
+        -e pnpm_config_store_dir="$pnpm_store"
         -v "$HOME/.config/pnpm":/root/.config/pnpm
         -v "$corepack_dir":/opt/node-shims-corepack
         -e COREPACK_ENABLE_STRICT=0
         -e COREPACK_ENABLE_NETWORK=1
     )
     
+    # pnpm 10 and older read the npm_config_ form; npm warns about it, so
+    # only pnpm itself gets it.
+    if [[ "$tool" == "pnpm" ]]; then
+        args+=(-e npm_config_store_dir="$pnpm_store")
+    fi
+
     # Ensure host .npmrc exists so npm login persists across runs
     if [[ ! -f "$HOME/.npmrc" ]]; then
         : > "$HOME/.npmrc" || true

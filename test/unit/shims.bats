@@ -189,3 +189,21 @@ EOF
     [ "$status" -ne 0 ]
     [[ "$output" == *"Docker engine not running"* ]]
 }
+
+@test "pnpm store is mounted at the host default path, npm never sees store-dir" {
+    printf '#!/bin/sh\necho Darwin\n' > "$STUB_DIR/uname"
+    chmod +x "$STUB_DIR/uname"
+    local store="$HOME/Library/pnpm/store"
+
+    pnpm install
+    docker_args_have -v "$store:$store"
+    docker_args_have -e "pnpm_config_store_dir=$store"
+    docker_args_have -e "npm_config_store_dir=$store"
+
+    npm install
+    docker_args_have -v "$store:$store"
+    run ! grep -q '^npm_config_store_dir=' "$DOCKER_ARGS_LOG"
+
+    PNPM_HOME="$HOME/pnpm-home" pnpm install
+    docker_args_have -e "pnpm_config_store_dir=$HOME/pnpm-home/store"
+}

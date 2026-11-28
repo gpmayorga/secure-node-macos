@@ -169,8 +169,9 @@ save-exact=true
 1. **Shims intercept commands** - `node`, `npm`, `yarn`, `pnpm` commands are caught by shims
 2. **Docker containers** - Commands run in isolated Docker containers
 3. **Volume mounting** - Your project is mounted at its real host path (and as `/work`) so `node /Users/…/script.js` works; caches are mounted separately
-4. **Version detection** - Smart detection of Node.js version from various sources
-5. **Automatic setup** - Package managers install automatically when needed
+4. **Shared package stores** - The Yarn 2+ cache (`~/.yarn/berry`) and the pnpm store (pnpm's host default, e.g. `~/Library/pnpm/store`, or `$PNPM_HOME/store`) are mounted at their host paths, so projects keep working when you switch to `NODE_SHIMS_MODE=local`
+5. **Version detection** - Smart detection of Node.js version from various sources
+6. **Automatic setup** - Package managers install automatically when needed
 
 ## Testing
 

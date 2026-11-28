@@ -10,6 +10,8 @@ ensure_docker
 img="$(resolve_image)"
 
 prepare_project_mounts
+pnpm_store="$(pnpm_store_dir)"
+mkdir -p "$HOME/.yarn/berry" "$pnpm_store"
 append_op_run_env
 declare -a args=(run --rm -it \
     "${__SHIM_PROJECT_MOUNTS[@]}" \
@@ -20,6 +22,8 @@ declare -a args=(run --rm -it \
     -v "$HOME/.cache/yarn":/root/.cache/yarn \
     -v "$HOME/.yarn/berry":"$HOME/.yarn/berry" \
     -e YARN_GLOBAL_FOLDER="$HOME/.yarn/berry" \
+    -v "$pnpm_store":"$pnpm_store" \
+    -e pnpm_config_store_dir="$pnpm_store" \
     -v "$HOME/.config/pnpm":/root/.config/pnpm \
     -e COREPACK_ENABLE_STRICT=0 \
     -e COREPACK_ENABLE_NETWORK=1
