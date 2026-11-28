@@ -864,6 +864,13 @@ host_platform() {
 is_install_command() {
     local tool="$1" sub="" arg
     shift
+    # `--help` / `--version` print and exit, whatever the subcommand
+    # (`yarn --version` would otherwise count as a bare `yarn` install).
+    for arg in "$@"; do
+        case "$arg" in
+            --help|-h|--version|-v) return 1 ;;
+        esac
+    done
     for arg in "$@"; do
         case "$arg" in
             -*) continue ;;
