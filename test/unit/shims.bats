@@ -123,7 +123,8 @@ recorded_image() {
 }
 
 @test "wrangler login needs confirmation and publishes the callback port on loopback" {
-    run npx wrangler login
+    require_detachable_tty
+    run without_tty npx wrangler login
     [ "$status" -ne 0 ]
     [ ! -e "$DOCKER_ARGS_LOG" ]
 
@@ -330,6 +331,15 @@ without_tty() {
     fi
 }
 
+# The wrangler prompt reads /dev/tty. Without setsid (macOS) a test run
+# from a terminal would block on it, so the no-terminal checks skip there.
+require_detachable_tty() {
+    command -v setsid >/dev/null 2>&1 && return 0
+    if { : </dev/tty; } 2>/dev/null; then
+        skip "needs setsid to run without a terminal"
+    fi
+}
+
 @test "wrangler calls that need the API get the config mount and env by name only" {
     make_wrangler_project
     add_profile default
@@ -477,6 +487,7 @@ without_tty() {
     make_wrangler_project
     add_profile default
 
+    require_detachable_tty
     run without_tty npx wrangler deploy
     [ "$status" -ne 0 ]
     [[ "$output" == *"NODE_SHIMS_WRANGLER_YES=1"* ]]
