@@ -113,12 +113,18 @@ recorded_image() {
     run ! docker_args_have -p "3000:3000"
 }
 
-@test "wrangler login maps the OAuth callback port" {
+@test "wrangler login needs confirmation and publishes the callback port on loopback" {
+    run npx wrangler login
+    [ "$status" -ne 0 ]
+    [ ! -e "$DOCKER_ARGS_LOG" ]
+
+    export NODE_SHIMS_WRANGLER_YES=1
     npx wrangler login
-    docker_args_have -p "8976:8976"
+    docker_args_have -p "127.0.0.1:8976:8976"
+    run ! grep -qx -- '8976:8976' "$DOCKER_ARGS_LOG"
 
     WRANGLER_LOGIN_PORT=9797 npx wrangler login
-    docker_args_have -p "9797:9797"
+    docker_args_have -p "127.0.0.1:9797:9797"
 }
 
 @test "NODE_SHIMS_DOCKER mounts the host docker socket" {
