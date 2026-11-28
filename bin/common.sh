@@ -285,7 +285,9 @@ docker_exec() {
     # Node 25+ images no longer bundle corepack. A pinned copy is installed
     # once into this host dir and reused (it is plain JS, any Node works).
     local corepack_dir="$HOME/.cache/node-shims/corepack"
-    mkdir -p "$corepack_dir"
+    # Yarn 2+ keeps its package cache here and PnP resolves into it at
+    # runtime, so it must outlive the container that ran `yarn install`.
+    mkdir -p "$corepack_dir" "$HOME/.yarn/berry"
     local -a args=(run --rm
         "${__SHIM_PROJECT_MOUNTS[@]}"
         "${__SHIM_OP_ENV[@]}"
@@ -293,6 +295,7 @@ docker_exec() {
         -v "$HOME/.npmrc":/root/.npmrc
         -v "$HOME/.cache/pnpm":/root/.cache/pnpm
         -v "$HOME/.cache/yarn":/root/.cache/yarn
+        -v "$HOME/.yarn/berry":/root/.yarn/berry
         -v "$HOME/.config/pnpm":/root/.config/pnpm
         -v "$corepack_dir":/opt/node-shims-corepack
         -e COREPACK_ENABLE_STRICT=0
