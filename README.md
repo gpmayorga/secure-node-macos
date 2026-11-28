@@ -253,6 +253,20 @@ strict-ssl=true
 save-exact=true
 ```
 
+## AI Coding Agents
+AI agents assume a normal host Node install. Without context they may "fix" a failing command by installing Node with Homebrew or nvm, or by switching to `NODE_SHIMS_MODE=local`, which undoes the isolation.
+
+`skills/node-docker-shims/SKILL.md` is a [Claude Code skill](https://docs.claude.com/en/docs/claude-code/skills) that explains how the shims work: what the container can see, env vars, ports, native packages, install scripts, wrangler credentials, and which settings an agent must not change without asking. `install-shims.sh` sets it up; to run that step on its own:
+```bash
+./scripts/install-agent-skill.sh          # asks before editing ~/.claude/CLAUDE.md
+./scripts/install-agent-skill.sh --yes    # no prompt
+```
+It does two things:
+- Symlinks the skill into `~/.claude/skills/node-docker-shims`, so `git pull` keeps it current.
+- Adds one line to `~/.claude/CLAUDE.md` (loaded in every session) telling agents that Node runs in Docker and to load the skill before running JavaScript tooling. Skills only load when their description matches the task, so this line makes sure agents never start from the wrong assumption.
+
+Other agents (Cursor, Codex, ...) can use the same file: point their rules file (`AGENTS.md`, `.cursor/rules`) at it.
+
 ## How It Works
 
 1. **Shims intercept commands** - `node`, `npm`, `yarn`, `pnpm` commands are caught by shims
