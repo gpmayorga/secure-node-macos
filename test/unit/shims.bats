@@ -189,3 +189,28 @@ EOF
     [ "$status" -ne 0 ]
     [[ "$output" == *"Docker engine not running"* ]]
 }
+
+@test "node-shell mounts the corepack dir and bootstraps it like docker_exec" {
+    node-shell
+    docker_args_have -v "$HOME/.cache/node-shims/corepack:/opt/node-shims-corepack"
+    docker_args_have -v "$HOME/.yarn/berry:$HOME/.yarn/berry"
+    docker_args_have -e "YARN_GLOBAL_FOLDER=$HOME/.yarn/berry"
+    [ -d "$HOME/.cache/node-shims/corepack" ]
+
+    local shell_setup
+    shell_setup="$(tail -1 "$DOCKER_ARGS_LOG")"
+    [[ "$shell_setup" == *"corepack@0.36.0"* ]]
+    [[ "$shell_setup" == *"; exec sh" ]]
+
+    # The tool shims run the exact same bootstrap before the tool.
+    node --version
+    local exec_setup
+    exec_setup="$(grep -A1 -x -- '-c' "$DOCKER_ARGS_LOG" | tail -1)"
+    [ "${shell_setup%; exec sh}" = "${exec_setup%; exec \"\$@\"}" ]
+}
+
+@test "node-shell maps the same default dev ports as the tool shims" {
+    node-shell dev
+    docker_args_have -p "5173:5173"
+    docker_args_have -p "8787:8787"
+}
