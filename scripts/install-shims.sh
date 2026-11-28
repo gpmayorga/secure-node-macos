@@ -69,6 +69,10 @@ else
     echo "⚠️  Docker connectivity test failed - please check your internet connection"
 fi
 
+# Teach AI coding agents (Claude Code) how the shims work
+echo "🤖 Setting up the agent skill..."
+"$repo_root/scripts/install-agent-skill.sh" || echo "⚠️  Agent skill setup failed; run scripts/install-agent-skill.sh later"
+
 echo ""
 echo "🎉 Shims installed successfully!"
 echo "💡 Restart your shell or run: source ~/.zshrc"
