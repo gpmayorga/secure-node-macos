@@ -1,7 +1,9 @@
 #!/usr/bin/env bats
 # End-to-end checks against a real Docker engine: every command the README
 # documents as working, run through the shims on a hello-world project.
-# Needs network access to Docker Hub and the npm registry.
+# Needs network access to Docker Hub and the npm registry. Exact-output
+# checks use --separate-stderr: the first run of an image prints Docker's
+# pull progress on stderr.
 
 load ../helpers
 
@@ -79,7 +81,7 @@ set_package_manager() {
     make_project hello
     set_package_manager "yarn@$YARN_VERSION"
 
-    run yarn --version
+    run --separate-stderr yarn --version
     [ "$status" -eq 0 ]
     [ "$output" = "$YARN_VERSION" ]
 
@@ -95,11 +97,24 @@ set_package_manager() {
     [[ "$output" == *"Hello, world!"* ]]
 }
 
+@test "a yarn install in Docker still runs with NODE_SHIMS_LOCAL" {
+    PATH="${PATH#"$SHIMS_DIR:"}" command -v node >/dev/null ||
+        skip "no host node outside the shims"
+    make_project hello
+    set_package_manager "yarn@$YARN_VERSION"
+    yarn install
+
+    # .pnp.cjs records where the cache lives; the host node must find it too.
+    NODE_SHIMS_LOCAL=1 run node --require ./.pnp.cjs index.js
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Hello, world!"* ]]
+}
+
 @test "pnpm from packageManager installs, tests and starts the app" {
     make_project hello
     set_package_manager "pnpm@$PNPM_VERSION"
 
-    run pnpm --version
+    run --separate-stderr pnpm --version
     [ "$status" -eq 0 ]
     [ "$output" = "$PNPM_VERSION" ]
 
@@ -118,7 +133,7 @@ set_package_manager() {
 @test "npx wrangler builds a worker without logging in" {
     make_project hello-worker
 
-    run npx --yes "wrangler@$WRANGLER_VERSION" --version
+    run --separate-stderr npx --yes "wrangler@$WRANGLER_VERSION" --version
     [ "$status" -eq 0 ]
     [[ "$output" == *"$WRANGLER_VERSION"* ]]
 

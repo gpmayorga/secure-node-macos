@@ -193,7 +193,8 @@ EOF
 @test "node-shell mounts the corepack dir and bootstraps it like docker_exec" {
     node-shell
     docker_args_have -v "$HOME/.cache/node-shims/corepack:/opt/node-shims-corepack"
-    docker_args_have -v "$HOME/.yarn/berry:/root/.yarn/berry"
+    docker_args_have -v "$HOME/.yarn/berry:$HOME/.yarn/berry"
+    docker_args_have -e "YARN_GLOBAL_FOLDER=$HOME/.yarn/berry"
     [ -d "$HOME/.cache/node-shims/corepack" ]
 
     local shell_setup
