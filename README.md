@@ -130,19 +130,34 @@ export DOCKER_NODE_PORTS="3000,4000,5000,8000"
 ```
 
 ### Wrangler (Cloudflare Workers)
-Wrangler works inside the container. The shims turn on extra wrangler handling when the command invokes `wrangler` (`npx wrangler deploy`, `pnpm wrangler dev`) or the current directory is a wrangler project (has `wrangler.toml` / `wrangler.json(c)`, or `wrangler` in `package.json`). Other projects never get the Cloudflare credentials.
+Wrangler works inside the container. The shims turn on extra wrangler handling when the command invokes `wrangler` (`npx wrangler deploy`, `pnpm wrangler dev`) or the current directory is a wrangler project (has `wrangler.toml` / `wrangler.json(c)`, or `wrangler` in `package.json`).
 
 What the shims do for wrangler:
 
 | Issue | What the shim does |
 |---|---|
-| `wrangler login` token lost after each run (`--rm`) | Mounts `~/.config/node-shims/wrangler` as wrangler's config dir, so the login persists |
-| API token auth | Forwards any `CLOUDFLARE_*` and `WRANGLER_*` env vars that are set (by name, values never on argv) |
+| `wrangler login` token lost after each run (`--rm`) | Mounts `~/.config/node-shims/wrangler` as wrangler's config dir, so the login persists (credentialed calls only, see below) |
+| API token auth | Forwards any `CLOUDFLARE_*` and `WRANGLER_*` env vars that are set (by name, values never on argv; credentialed calls only) |
 | OAuth callback unreachable from the browser | Publishes `127.0.0.1:8976` and adds `--callback-host=0.0.0.0 --callback-port=8976 --browser=false` to `wrangler login` |
 | `wrangler dev` unreachable on `localhost:8787` | Adds `--ip=0.0.0.0` to `wrangler dev` / `wrangler pages dev` |
 | `workerd` (used by `wrangler dev`) has no Alpine/musl build | Uses `node:<version>-bookworm` instead of `-alpine` for wrangler projects |
 
 Current wrangler 4 needs Node 22 or newer. The default image (Node 26) is fine; only projects that pin an older version in `.nvmrc`, `.node-version` or `engines` need to raise it.
+
+**Which calls get Cloudflare credentials.** The config mount and the `CLOUDFLARE_*` / `WRANGLER_*` env vars go only to calls that run wrangler. `npm install`, `npm ls`, `node script.js` and other calls in a wrangler project get neither, so dependency install scripts cannot read your token.
+
+| Call | Credentials |
+|---|---|
+| `npx wrangler deploy`, `pnpm exec wrangler secret list`, `npx wrangler login`, `wrangler whoami`, `wrangler dev --remote` | yes |
+| `npm run deploy` / `pnpm deploy-prod` where the root `package.json` script calls wrangler | yes |
+| `wrangler dev` / `wrangler pages dev` (local), `wrangler types`, `wrangler build`, `wrangler deploy --dry-run`, `wrangler versions upload --dry-run`, `wrangler pages functions build`, `--help`, `--version` | no |
+| `npm install`, `npm i -D wrangler`, `pnpm add wrangler`, any call that does not run wrangler | no |
+
+The list of commands that get no credentials is short on purpose: it holds only commands that work while logged out. Every other wrangler command gets credentials, so a command missing from the list still works.
+
+`wrangler dev` gets credentials anyway when the wrangler config has remote bindings (`remote = true`) or bindings that always call Cloudflare (Workers AI, Vectorize, Browser Rendering, mTLS, dispatch namespaces, Images, Media, VPC services), when `--remote` is set, or when `--config` points somewhere else.
+
+The shim cannot see the script for `pnpm --filter <pkg> run deploy` (or `--dir`, `--workspace`, `-r`), since it lives in another package's `package.json`, so those calls get no credentials. Set `NODE_SHIMS_WRANGLER_AUTH=1` for them. `op run --env-file=.env -- <cmd>` still forwards every variable from the env file, whatever the command, because you asked for it explicitly.
 
 **Recommended: scoped API token instead of `wrangler login`.** `wrangler login` stores a broad OAuth refresh token on disk. A scoped [API token](https://dash.cloudflare.com/profile/api-tokens) kept in 1Password gives any compromised dependency less to steal:
 ```bash
@@ -171,11 +186,12 @@ Settings:
 | Variable | Default | Purpose |
 |---|---|---|
 | `NODE_SHIMS_WRANGLER` | `auto` | `1` forces wrangler handling on (e.g. monorepo root), `0` turns it off |
+| `NODE_SHIMS_WRANGLER_AUTH` | `auto` | `1` always passes credentials (e.g. `pnpm --filter <pkg> run deploy`), `0` never does |
 | `NODE_SHIMS_WRANGLER_CONFIG_DIR` | `~/.config/node-shims/wrangler` | Host dir for wrangler's config/OAuth token, or `none` |
 | `NODE_SHIMS_WRANGLER_FLAGS` | on | `0` stops the shim from adding `--callback-host`, `--ip` and similar flags (wrangler 3 does not know `--callback-host`) |
 | `WRANGLER_LOGIN_PORT` | `8976` | Login callback port |
 
-If you previously ran `npm install` in a wrangler project with the Alpine image, delete `node_modules` and reinstall, since packages with musl/glibc variants (e.g. Rollup) were installed for Alpine.
+If you previously ran `npm install` in a wrangler project with the Alpine image, or with Node on macOS, delete `node_modules` and reinstall through the shims. Packages with native builds (`workerd`, Rollup) were installed for Alpine or macOS, and wrangler fails with "You installed workerd on another platform".
 
 ### Docker from npm scripts
 To allow **npm scripts** (e.g. `npm run build` that runs `docker build`) to use Docker, mount the host Docker socket and enable the Docker CLI inside the Node container:

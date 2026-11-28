@@ -305,20 +305,184 @@ use_wrangler_support() {
     argv_invokes_wrangler "$@" || project_uses_wrangler
 }
 
-# Print the non-flag words after the wrangler token, e.g. "pages dev" or "login".
-wrangler_subcommand() {
-    local arg seen=0 out=""
+# Print the non-flag words of an argv, e.g. "pages dev" or "login".
+nonflag_words() {
+    local arg out=""
     for arg in "$@"; do
-        if (( seen )); then
-            case "$arg" in
-                -*) continue ;;
-            esac
-            out="${out:+$out }$arg"
-        elif is_wrangler_token "$arg"; then
-            seen=1
-        fi
+        case "$arg" in
+            -*) continue ;;
+        esac
+        out="${out:+$out }$arg"
     done
     printf '%s' "$out"
+}
+
+# Package-manager flags whose next argv token is a value, not a command.
+is_value_flag() {
+    case "$1" in
+        --filter|-F|--dir|-C|--workspace|--package|-p|--prefix|--cwd) return 0 ;;
+    esac
+    return 1
+}
+
+# Strict check: wrangler is the program this call runs, not just a word in
+# argv. `npx wrangler`, `pnpm exec wrangler`, `yarn dlx wrangler@4` and
+# `node node_modules/.bin/wrangler` match; `npm i -D wrangler` does not.
+# Sets __SHIM_WRANGLER_WORDS to the argv after the wrangler token.
+wrangler_words_from_argv() {
+    local -a a=("$@")
+    local n=${#a[@]} i=0 pass
+    for pass in command executor; do
+        while (( i < n )); do
+            if is_value_flag "${a[i]}"; then
+                i=$((i + 2))
+                continue
+            fi
+            case "${a[i]}" in
+                -*) i=$((i + 1)); continue ;;
+            esac
+            break
+        done
+        (( i < n )) || return 1
+        if [[ "$pass" == command ]]; then
+            case "${a[i]}" in
+                exec|x|dlx) i=$((i + 1)); continue ;;
+            esac
+        fi
+        break
+    done
+    is_wrangler_token "${a[i]}" || return 1
+    __SHIM_WRANGLER_WORDS=(${a[@]+"${a[@]:i+1}"})
+    __SHIM_WRANGLER_FROM_ARGV=1
+}
+
+# Print the body of package.json script $1. Best effort with sed: a
+# minified package.json or a body with `}` before the script prints nothing,
+# and the caller then treats the call as not running wrangler.
+package_script_body() {
+    local name_re
+    name_re="$(printf '%s' "$1" | sed 's/[][\.*^$+?(){}|/]/\\&/g')"
+    sed -n '/"scripts"[[:space:]]*:/,/}/p' package.json 2>/dev/null \
+        | grep -E "^[[:space:]]*\"${name_re}\"[[:space:]]*:" \
+        | head -1 \
+        | sed -E 's/^[^:]*:[[:space:]]*"(.*)"[[:space:]]*,?[[:space:]]*$/\1/'
+}
+
+# `npm run deploy` / `pnpm dev` / `yarn deploy`: wrangler is not in argv,
+# so read the script body instead. Sets __SHIM_WRANGLER_WORDS like the argv
+# check and __SHIM_WRANGLER_MULTI=1 if the script runs wrangler more than once.
+# Scripts in a workspace package (`pnpm --filter x run deploy`) are not
+# visible from here; NODE_SHIMS_WRANGLER_AUTH=1 covers those.
+wrangler_words_from_script() {
+    local tool="$1"
+    shift
+    case "$tool" in
+        npm|pnpm|yarn) ;;
+        *) return 1 ;;
+    esac
+    [[ -f package.json ]] || return 1
+
+    local -a a=("$@")
+    local n=${#a[@]} i=0 name=""
+    while (( i < n )); do
+        # --filter/--dir/--workspace run another package's script; its
+        # package.json is not the one in $PWD, so do not guess.
+        if is_value_flag "${a[i]}"; then
+            return 1
+        fi
+        case "${a[i]}" in
+            --filter=*|--dir=*|--workspace=*|--prefix=*|--cwd=*|-r|--recursive) return 1 ;;
+            -*) i=$((i + 1)); continue ;;
+        esac
+        break
+    done
+    (( i < n )) || return 1
+    case "${a[i]}" in
+        run|run-script)
+            i=$((i + 1))
+            while (( i < n )) && [[ "${a[i]}" == -* ]]; do i=$((i + 1)); done
+            (( i < n )) || return 1
+            name="${a[i]}"
+            ;;
+        start|test|stop|restart) name="${a[i]}" ;;
+        *)
+            # pnpm and yarn run a script given by bare name; npm does not.
+            [[ "$tool" == npm ]] && return 1
+            name="${a[i]}"
+            ;;
+    esac
+
+    local body
+    body="$(package_script_body "$name")"
+    [[ -n "$body" ]] || return 1
+
+    local -a words
+    read -ra words <<< "$body"
+    local j found=-1 count=0
+    for (( j = 0; j < ${#words[@]}; j++ )); do
+        if is_wrangler_token "${words[j]}"; then
+            (( found < 0 )) && found=$j
+            count=$((count + 1))
+        fi
+    done
+    (( found >= 0 )) || return 1
+    __SHIM_WRANGLER_WORDS=(${words[@]+"${words[@]:found+1}"})
+    (( count > 1 )) && __SHIM_WRANGLER_MULTI=1
+    return 0
+}
+
+# True if the wrangler config may need the Cloudflare API even in local
+# `wrangler dev`: remote bindings, or binding types that always proxy to
+# Cloudflare (Workers AI, Vectorize, Browser Rendering, ...). Over-matching
+# is fine: it only means dev gets credentials.
+wrangler_config_needs_remote() {
+    local keys='remote|ai|vectorize|browser|mtls_certificates|dispatch_namespaces|images|media|vpc_services'
+    local f
+    for f in wrangler.toml wrangler.json wrangler.jsonc; do
+        [[ -f "$f" ]] || continue
+        grep -Eq "(^|[^A-Za-z0-9_])\"?(${keys})\"?[[:space:]]*[=:]" "$f" && return 0
+        grep -Eq "^[[:space:]]*\[\[?([A-Za-z0-9_.-]+\.)?(${keys})\]" "$f" && return 0
+    done
+    return 1
+}
+
+# Wrangler commands that run without touching the Cloudflare API, so they
+# get no credentials. Kept short on purpose: only commands verified to work
+# while logged out. Anything not listed gets credentials, so a missing entry
+# costs exposure, never a broken command. Args: argv after the wrangler token.
+wrangler_is_local_only() {
+    if has_flag --help "$@" || has_flag -h "$@" || has_flag --version "$@" || has_flag -v "$@"; then
+        return 0
+    fi
+    local sub
+    sub="$(nonflag_words "$@")"
+    case "$sub" in
+        "") return 0 ;;  # bare `wrangler` prints help
+        types|types\ *|build|build\ *|pages\ functions\ build|pages\ functions\ build\ *)
+            return 0 ;;
+        deploy|deploy\ *|versions\ upload|versions\ upload\ *)
+            has_flag --dry-run "$@" && return 0 ;;
+        dev|dev\ *|pages\ dev|pages\ dev\ *)
+            if has_flag --remote "$@" || has_flag -r "$@" \
+                || has_flag --config "$@" || has_flag -c "$@" \
+                || wrangler_config_needs_remote; then
+                return 1
+            fi
+            return 0 ;;
+    esac
+    return 1
+}
+
+# NODE_SHIMS_WRANGLER_AUTH: auto (default) | 1 always | 0 never
+wrangler_wants_credentials() {
+    local mode="${NODE_SHIMS_WRANGLER_AUTH:-auto}"
+    if [[ "$mode" != "auto" ]]; then
+        is_truthy "$mode"
+        return
+    fi
+    (( __SHIM_WRANGLER_RUNS )) || return 1
+    (( __SHIM_WRANGLER_MULTI )) && return 0
+    ! wrangler_is_local_only ${__SHIM_WRANGLER_WORDS[@]+"${__SHIM_WRANGLER_WORDS[@]}"}
 }
 
 # True if the flag (e.g. --ip) is present as `--ip`, `--ip=x`, or `--no-ip`.
@@ -337,48 +501,67 @@ has_flag() {
 #   __SHIM_WRANGLER_DOCKER_ARGS  extra `docker run` args (mounts, env, ports)
 #   __SHIM_TOOL_ARGS             argv for the tool, with container flags added
 prepare_wrangler() {
+    local tool="$1"
+    shift
     __SHIM_WRANGLER_DOCKER_ARGS=()
     __SHIM_TOOL_ARGS=("$@")
+    __SHIM_WRANGLER_WORDS=()
+    __SHIM_WRANGLER_RUNS=0
+    __SHIM_WRANGLER_FROM_ARGV=0
+    __SHIM_WRANGLER_MULTI=0
     use_wrangler_support "$@" || return 0
 
     local debug=0
     is_truthy "${NODE_SHIMS_DEBUG:-}" && debug=1
 
-    # 1. Persistent config dir (OAuth token from `wrangler login`).
-    #    Wrangler resolves it to $XDG_CONFIG_HOME/.wrangler = /root/.config/.wrangler
-    local config_dir="${NODE_SHIMS_WRANGLER_CONFIG_DIR:-$HOME/.config/node-shims/wrangler}"
-    if [[ "$config_dir" != "none" ]]; then
-        if [[ ! -d "$config_dir" ]]; then
-            mkdir -p "$config_dir"
-            chmod 700 "$config_dir" 2>/dev/null || true
-        fi
-        __SHIM_WRANGLER_DOCKER_ARGS+=(-v "$config_dir":/root/.config/.wrangler)
-        (( debug )) && echo "node-shims: wrangler config dir: $config_dir" >&2
+    if wrangler_words_from_argv "$@" || wrangler_words_from_script "$tool" "$@"; then
+        __SHIM_WRANGLER_RUNS=1
     fi
 
-    # 2. Forward Cloudflare/wrangler env vars by name (values stay off argv).
-    local name
-    while IFS= read -r name; do
-        case "$name" in
-            WRANGLER_LOGIN_PORT) continue ;;
-            CLOUDFLARE_*|WRANGLER_*)
-                __SHIM_WRANGLER_DOCKER_ARGS+=(-e "$name")
-                (( debug )) && echo "node-shims: forwarding $name" >&2
-                ;;
-        esac
-    done < <(compgen -e)
+    # 1+2. Credentials go only to calls that run wrangler for something that
+    #      needs the Cloudflare API, never to `npm install` and the dependency
+    #      scripts it runs.
+    if wrangler_wants_credentials; then
+        (( debug )) && echo "node-shims: wrangler credentials: passed" >&2
+
+        # Persistent config dir (OAuth token from `wrangler login`).
+        # Wrangler resolves it to $XDG_CONFIG_HOME/.wrangler = /root/.config/.wrangler
+        local config_dir="${NODE_SHIMS_WRANGLER_CONFIG_DIR:-$HOME/.config/node-shims/wrangler}"
+        if [[ "$config_dir" != "none" ]]; then
+            if [[ ! -d "$config_dir" ]]; then
+                mkdir -p "$config_dir"
+                chmod 700 "$config_dir" 2>/dev/null || true
+            fi
+            __SHIM_WRANGLER_DOCKER_ARGS+=(-v "$config_dir":/root/.config/.wrangler)
+            (( debug )) && echo "node-shims: wrangler config dir: $config_dir" >&2
+        fi
+
+        # Forward Cloudflare/wrangler env vars by name (values stay off argv).
+        local name
+        while IFS= read -r name; do
+            case "$name" in
+                WRANGLER_LOGIN_PORT) continue ;;
+                CLOUDFLARE_*|WRANGLER_*)
+                    __SHIM_WRANGLER_DOCKER_ARGS+=(-e "$name")
+                    (( debug )) && echo "node-shims: forwarding $name" >&2
+                    ;;
+            esac
+        done < <(compgen -e)
+    elif (( debug )); then
+        echo "node-shims: wrangler credentials: withheld (not a wrangler call that needs the Cloudflare API)" >&2
+    fi
 
     # 3. Make wrangler's listeners reachable through Docker port publishing.
     #    Only possible when wrangler is in argv; `npm run dev` needs
     #    `[dev] ip = "0.0.0.0"` in wrangler.toml instead (see README).
-    argv_invokes_wrangler "$@" || return 0
+    (( __SHIM_WRANGLER_FROM_ARGV )) || return 0
     local inject=1
     if [[ -n "${NODE_SHIMS_WRANGLER_FLAGS:-}" ]] && ! is_truthy "$NODE_SHIMS_WRANGLER_FLAGS"; then
         inject=0
     fi
 
     local sub
-    sub="$(wrangler_subcommand "$@")"
+    sub="$(nonflag_words ${__SHIM_WRANGLER_WORDS[@]+"${__SHIM_WRANGLER_WORDS[@]}"})"
     case "$sub" in
         login|login\ *)
             # --device needs no callback server at all.
@@ -431,7 +614,7 @@ docker_exec() {
     prepare_project_mounts
     append_extra_host_mounts "$__SHIM_WORKDIR_PHYSICAL" "$@"
     append_op_run_env
-    prepare_wrangler "$@"
+    prepare_wrangler "$tool" "$@"
     # workerd (wrangler dev) is glibc-only; use the Debian variant of the same
     # Node version for wrangler projects unless the user pinned NODE_IMAGE.
     if use_wrangler_support "$@" && [[ -z "${NODE_IMAGE:-}" && "$img" == *-alpine ]]; then
