@@ -121,6 +121,22 @@ npm run dev      # Port 3000, 5173, 8080, 4200, etc. automatically mapped
 yarn start       # Your dev server will be accessible on localhost
 ```
 
+The shims map ports only when the command looks like a dev server (`dev`, `start`, `serve`, `vite`, `next`, ...).
+
+### Interactive shell
+`node-shell` opens a shell in the same container setup, in the current project. It always maps the dev ports, so a dev server started from inside it is reachable on `localhost`:
+```bash
+node-shell
+# inside the container
+yarn dev
+```
+
+`docker run` fails if one of those host ports is already in use, for example when a dev server or a second `node-shell` is already running. Opt out of port mapping for that shell, or pick other ports:
+```bash
+NODE_SHELL_NO_PORTS=1 node-shell
+DOCKER_NODE_PORTS="3100,5273" node-shell
+```
+
 ## Configuration
 
 ### Custom Ports
@@ -222,11 +238,7 @@ export NODE_SHIMS_DOCKER=1
 npm run build   # your script can now run docker build, docker run, etc.
 ```
 
-This mounts `/var/run/docker.sock` into the container and installs the `docker` CLI there, so containers started from npm scripts run on your host Docker daemon. To test:
-
-```bash
-./scripts/test-docker-in-npm.sh
-```
+This mounts `/var/run/docker.sock` into the container and installs the `docker` CLI there, so containers started from npm scripts run on your host Docker daemon. The smoke tests cover this (see [Testing](#testing)).
 
 ### Custom Node.js Image
 Override the default image with the `NODE_IMAGE` environment variable:
@@ -240,6 +252,11 @@ Node 25 and newer images do not include corepack. For those, the shims install `
 export NODE_SHIMS_COREPACK_VERSION=0.36.0
 ```
 
+Setting up corepack adds about 0.2s per call, so it only happens when the call may need yarn or pnpm: always for `yarn` and `pnpm`, and for `node` / `npm` / `npx` when `package.json` has a `packageManager` field or mentions `yarn`, `pnpm` or `corepack` (e.g. a script running `pnpm -r build`). If a tool spawns yarn or pnpm without any hint in `package.json`, force it:
+```bash
+export NODE_SHIMS_COREPACK=1
+```
+
 ### npm Configuration
 The included `.npmrc` provides safe defaults:
 ```
@@ -248,25 +265,52 @@ strict-ssl=true
 save-exact=true
 ```
 
+## AI Coding Agents
+AI agents assume a normal host Node install. Without context they may "fix" a failing command by installing Node with Homebrew or nvm, or by switching to `NODE_SHIMS_MODE=local`, which undoes the isolation.
+
+`skills/node-docker-shims/SKILL.md` is a [Claude Code skill](https://docs.claude.com/en/docs/claude-code/skills) that explains how the shims work: what the container can see, env vars, ports, native packages, install scripts, wrangler credentials, and which settings an agent must not change without asking. `install-shims.sh` sets it up; to run that step on its own:
+```bash
+./scripts/install-agent-skill.sh          # asks before editing ~/.claude/CLAUDE.md
+./scripts/install-agent-skill.sh --yes    # no prompt
+```
+It does two things:
+- Symlinks the skill into `~/.claude/skills/node-docker-shims`, so `git pull` keeps it current.
+- Adds one line to `~/.claude/CLAUDE.md` (loaded in every session) telling agents that Node runs in Docker and to load the skill before running JavaScript tooling. Skills only load when their description matches the task, so this line makes sure agents never start from the wrong assumption.
+
+Other agents (Cursor, Codex, ...) can use the same file: point their rules file (`AGENTS.md`, `.cursor/rules`) at it.
+
 ## How It Works
 
 1. **Shims intercept commands** - `node`, `npm`, `yarn`, `pnpm` commands are caught by shims
 2. **Docker containers** - Commands run in isolated Docker containers
 3. **Volume mounting** - Your project is mounted at its real host path (and as `/work`) so `node /Users/…/script.js` works; caches are mounted separately
    - Inside a workspace package (a parent has `pnpm-workspace.yaml`, or a `package.json` with `"workspaces"`), the workspace root is mounted instead, since pnpm links and npm/yarn hoist dependencies into the root `node_modules`. `$HOME` and `/` are never mounted. `NODE_SHIMS_WORKSPACE=0` mounts only the current directory.
-4. **Version detection** - Smart detection of Node.js version from various sources
-5. **Automatic setup** - Package managers install automatically when needed
+4. **Shared package stores** - The Yarn 2+ cache (`~/.yarn/berry`) and the pnpm store (pnpm's host default, e.g. `~/Library/pnpm/store`, or `$PNPM_HOME/store`) are mounted at their host paths, so projects keep working when you switch to `NODE_SHIMS_MODE=local`
+5. **Version detection** - Smart detection of Node.js version from various sources
+6. **Automatic setup** - Package managers install automatically when needed
+
+## Testing
+
+Tests use [bats](https://github.com/bats-core/bats-core) (`brew install bats-core` or `apt-get install bats`).
+
+```bash
+bats test/unit    # shim logic against a fake docker, no daemon needed (seconds)
+bats test/smoke   # real Docker + network: hello-world app through every shim
+```
+
+The smoke suite runs `node`, `npm`, `npx`, `yarn` and `pnpm` (via `packageManager`), `npx wrangler deploy --dry-run`, `.nvmrc` selection, Docker from npm scripts and `op run` env forwarding. Both suites run on every pull request.
 
 ## Maintenance
 
 The project includes automated maintenance:
 - **GitHub Action** updates the default Node.js version every 3 months
 - **ShellCheck** ensures script quality and safety
-- **Automatic testing** verifies new versions work correctly
+- **Tests** (unit and Docker smoke) run on every pull request
 
 ## Troubleshooting
 
 ### Docker not running
+The shims do not check the engine before each call (that cost time on every command), so a stopped engine shows Docker's own error: `Cannot connect to the Docker daemon ... Is the docker daemon running?`
 ```bash
 # Start Docker Desktop
 open -a Docker

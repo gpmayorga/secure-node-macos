@@ -55,7 +55,7 @@ esac
 
 # Create cache directories
 echo "📁 Creating cache directories..."
-mkdir -p "$HOME/.npm" "$HOME/.cache/pnpm" "$HOME/.cache/yarn" "$HOME/.config/pnpm"
+mkdir -p "$HOME/.npm" "$HOME/.cache/pnpm" "$HOME/.cache/yarn" "$HOME/.yarn/berry" "$HOME/.config/pnpm"
 
 # Test Docker connectivity
 echo "🐳 Testing Docker connectivity..."
@@ -68,6 +68,10 @@ if docker run --rm node:lts node --version >/dev/null 2>&1; then
 else
     echo "⚠️  Docker connectivity test failed - please check your internet connection"
 fi
+
+# Teach AI coding agents (Claude Code) how the shims work
+echo "🤖 Setting up the agent skill..."
+"$repo_root/scripts/install-agent-skill.sh" || echo "⚠️  Agent skill setup failed; run scripts/install-agent-skill.sh later"
 
 echo ""
 echo "🎉 Shims installed successfully!"
