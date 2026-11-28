@@ -81,7 +81,7 @@ recorded_image() {
 }
 
 @test "every tool shim runs the same-named tool inside the container" {
-    for tool in node npm npx yarn pnpm; do
+    for tool in node npm npx yarn pnpm corepack; do
         "$tool" --version
         [ "$(tail -2 "$DOCKER_ARGS_LOG")" = "$(printf '%s\n%s' "$tool" --version)" ]
     done
@@ -222,6 +222,46 @@ EOF
     rm package.json
     NODE_SHIMS_COREPACK=1 node --version
     corepack_in_setup
+}
+
+@test "corepack shim always sets up corepack, including the pinned copy for Node 25+" {
+    setup_script() { grep -A1 -x -- '-c' "$DOCKER_ARGS_LOG" | tail -1; }
+
+    corepack --version
+    [ "$(tail -2 "$DOCKER_ARGS_LOG")" = "$(printf '%s\n%s' corepack --version)" ]
+    # Images without corepack get the pinned copy on PATH before the call.
+    setup_script | grep -q '/opt/node-shims-corepack/bin'
+    setup_script | grep -q "corepack@0.36.0"
+    docker_args_have -v "$HOME/.cache/node-shims/corepack:/opt/node-shims-corepack"
+
+    NODE_SHIMS_COREPACK_VERSION=0.31.0 corepack pnpm --version
+    setup_script | grep -q "corepack@0.31.0"
+    [ "$(tail -3 "$DOCKER_ARGS_LOG")" = "$(printf '%s\n%s\n%s' corepack pnpm --version)" ]
+}
+
+@test "corepack local override runs the host corepack" {
+    mkdir "$STUB_DIR/host"
+    printf '#!/bin/sh\necho "host corepack $*"\n' > "$STUB_DIR/host/corepack"
+    chmod +x "$STUB_DIR/host/corepack"
+
+    # The shim comes first on PATH, so it wins over the host copy at the end.
+    PATH="$PATH:$STUB_DIR/host" run corepack --version
+    [ "$status" -eq 0 ]
+    [ -e "$DOCKER_ARGS_LOG" ]
+    rm "$DOCKER_ARGS_LOG"
+
+    PATH="$PATH:$STUB_DIR/host" NODE_SHIMS_MODE=local run corepack --version
+    [ "$status" -eq 0 ]
+    [ "$output" = "host corepack --version" ]
+    [ ! -e "$DOCKER_ARGS_LOG" ]
+}
+
+@test "corepack dev-server calls map ports" {
+    corepack pnpm dev
+    docker_args_have -p "5173:5173"
+
+    corepack --version
+    run ! grep -qx -- '-p' "$DOCKER_ARGS_LOG"
 }
 
 @test "pnpm store is mounted at the host default path, npm never sees store-dir" {
@@ -686,7 +726,9 @@ fake_arm64_linux() {
     fake_arm64_linux
     mkdir node_modules
     local call
-    for call in "npm install" "npm ci" "pnpm add left-pad" "yarn add left-pad"; do
+    for call in "npm install" "npm ci" "pnpm add left-pad" "yarn add left-pad" \
+        "corepack pnpm install" "corepack pnpm@11.28.10 add left-pad" "corepack yarn" \
+        "corepack use pnpm@11.28.10"; do
         rm -f "$MARKER"
         run_shim "$call"
         [ "$(cat "$MARKER")" = "linux-arm64-musl" ] || { echo "no marker for: $call"; return 1; }
@@ -701,6 +743,10 @@ fake_arm64_linux() {
     fake_arm64_linux
     mkdir node_modules
     node --version
+    [ ! -e "$MARKER" ]
+    corepack pnpm --version
+    corepack enable
+    corepack --version
     [ ! -e "$MARKER" ]
 
     echo darwin-arm64 > "$MARKER"

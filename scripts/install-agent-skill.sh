@@ -26,7 +26,7 @@ skill_src="$repo_root/skills/$skill_name"
 claude_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 skill_dst="$claude_dir/skills/$skill_name"
 claude_md="$claude_dir/CLAUDE.md"
-pointer="- node, npm, npx, yarn and pnpm on this machine are Docker shims (secure-node-macos), not a host Node install. Before running or debugging JavaScript tooling, load the \`$skill_name\` skill. Never install Node on the host, use NODE_SHIMS_MODE=local, or set NODE_SHIMS_WRANGLER_YES without asking first."
+pointer="- node, npm, npx, yarn, pnpm and corepack on this machine are Docker shims (secure-node-macos), not a host Node install. Before running or debugging JavaScript tooling, load the \`$skill_name\` skill. Never install Node on the host, use NODE_SHIMS_MODE=local, or set NODE_SHIMS_WRANGLER_YES without asking first."
 
 [[ -f "$skill_src/SKILL.md" ]] || { echo "❌ $skill_src/SKILL.md not found" >&2; exit 1; }
 
