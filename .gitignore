@@ -1,0 +1,8 @@
+# Local env files may hold secrets; commit op:// references only in files
+# that are meant to be shared, never real values.
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
