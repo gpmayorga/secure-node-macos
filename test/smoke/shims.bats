@@ -133,6 +133,11 @@ set_package_manager() {
 @test "pnpm shares one store between NODE_SHIMS_LOCAL and Docker" {
     local host_path="${PATH#"$SHIMS_DIR:"}"
     PATH="$host_path" command -v npm >/dev/null || skip "no host npm outside the shims"
+    # Fresh HOME: on Linux, earlier tests' containers leave root-owned files
+    # in the shared caches that a non-root host npm/pnpm cannot write to.
+    # (Docker Desktop on macOS maps ownership to the user, so this is CI only.)
+    HOME="$(mktemp -d "${TMPDIR:-/tmp}/node-shims-home.XXXXXX")"
+    export HOME
     make_project hello
     set_package_manager "pnpm@$PNPM_VERSION"
 

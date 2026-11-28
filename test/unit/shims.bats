@@ -13,9 +13,9 @@ setup() {
 
     cat > "$STUB_DIR/docker" <<'EOF'
 #!/usr/bin/env bash
-if [[ "${1:-}" == "info" ]]; then
-    [[ -z "${FAKE_DOCKER_DOWN:-}" ]]
-    exit
+if [[ -n "${FAKE_DOCKER_DOWN:-}" ]]; then
+    echo "Cannot connect to the Docker daemon. Is the docker daemon running?" >&2
+    exit 1
 fi
 printf '%s\n' "$@" > "$DOCKER_ARGS_LOG"
 EOF
@@ -199,10 +199,28 @@ EOF
     [ -e "$DOCKER_ARGS_LOG" ]
 }
 
-@test "shims fail clearly when the docker engine is down" {
+@test "a stopped docker engine surfaces as a failing call" {
     FAKE_DOCKER_DOWN=1 run node --version
     [ "$status" -ne 0 ]
-    [[ "$output" == *"Docker engine not running"* ]]
+    [[ "$output" == *"Cannot connect to the Docker daemon"* ]]
+}
+
+@test "corepack is set up only for calls that may need yarn or pnpm" {
+    corepack_in_setup() { grep -A1 -x -- '-c' "$DOCKER_ARGS_LOG" | tail -1 | grep -q corepack; }
+
+    node --version
+    run ! corepack_in_setup
+
+    yarn --version
+    corepack_in_setup
+
+    echo '{"packageManager":"pnpm@11.28.10"}' > package.json
+    node --version
+    corepack_in_setup
+
+    rm package.json
+    NODE_SHIMS_COREPACK=1 node --version
+    corepack_in_setup
 }
 
 @test "pnpm store is mounted at the host default path, npm never sees store-dir" {
@@ -236,8 +254,8 @@ EOF
     [[ "$shell_setup" == *"corepack@0.36.0"* ]]
     [[ "$shell_setup" == *"; exec sh" ]]
 
-    # The tool shims run the exact same bootstrap before the tool.
-    node --version
+    # The tool shims run the exact same bootstrap before a tool that needs it.
+    yarn --version
     local exec_setup
     exec_setup="$(grep -A1 -x -- '-c' "$DOCKER_ARGS_LOG" | tail -1)"
     [ "${shell_setup%; exec sh}" = "${exec_setup%; exec \"\$@\"}" ]

@@ -252,6 +252,11 @@ Node 25 and newer images do not include corepack. For those, the shims install `
 export NODE_SHIMS_COREPACK_VERSION=0.36.0
 ```
 
+Setting up corepack adds about 0.2s per call, so it only happens when the call may need yarn or pnpm: always for `yarn` and `pnpm`, and for `node` / `npm` / `npx` when `package.json` has a `packageManager` field or mentions `yarn`, `pnpm` or `corepack` (e.g. a script running `pnpm -r build`). If a tool spawns yarn or pnpm without any hint in `package.json`, force it:
+```bash
+export NODE_SHIMS_COREPACK=1
+```
+
 ### npm Configuration
 The included `.npmrc` provides safe defaults:
 ```
@@ -291,6 +296,7 @@ The project includes automated maintenance:
 ## Troubleshooting
 
 ### Docker not running
+The shims do not check the engine before each call (that cost time on every command), so a stopped engine shows Docker's own error: `Cannot connect to the Docker daemon ... Is the docker daemon running?`
 ```bash
 # Start Docker Desktop
 open -a Docker
