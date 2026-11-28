@@ -704,8 +704,23 @@ fake_arm64_linux() {
     [ ! -e "$MARKER" ]
 
     echo darwin-arm64 > "$MARKER"
-    node index.js 2>/dev/null
-    [ "$(cat "$MARKER")" = "darwin-arm64" ]
+    local call
+    for call in "node index.js" "yarn --version" "yarn -v" "yarn --help" \
+        "npm install --help" "pnpm add -h" "npm i --version"; do
+        run_shim "$call"
+        [ "$(cat "$MARKER")" = "darwin-arm64" ] || { echo "marker rewritten by: $call"; return 1; }
+    done
+}
+
+@test "bare yarn is still an install and records the platform" {
+    fake_arm64_linux
+    mkdir node_modules
+    local call
+    for call in "yarn" "yarn --frozen-lockfile"; do
+        rm -f "$MARKER"
+        run_shim "$call"
+        [ "$(cat "$MARKER")" = "linux-arm64-musl" ] || { echo "no marker for: $call"; return 1; }
+    done
 }
 
 @test "a run warns when node_modules was installed for another platform, and still runs" {
