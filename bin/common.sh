@@ -263,6 +263,53 @@ should_map_ports() {
     return 1
 }
 
+# Host ports mapped for dev servers unless DOCKER_NODE_PORTS overrides them
+NODE_SHIMS_DEFAULT_PORTS="3000,5173,8080,4200,3001,4000,5000,8787"
+
+# Container path of the pinned corepack used on images without one
+NODE_SHIMS_COREPACK_DIR_IN_CONTAINER=/opt/node-shims-corepack
+
+# Mounts and env shared by every container the shims start (docker_exec and
+# node-shell): package manager caches, npm auth and the corepack fallback dir.
+# Populates __SHIM_TOOL_MOUNTS.
+prepare_tool_mounts() {
+    # Node 25+ images no longer bundle corepack. A pinned copy is installed
+    # once into this host dir and reused (it is plain JS, any Node works).
+    local corepack_dir="$HOME/.cache/node-shims/corepack"
+    # Yarn 2+ keeps its package cache here and PnP resolves into it at
+    # runtime, so it must outlive the container that ran `yarn install`.
+    mkdir -p "$corepack_dir" "$HOME/.yarn/berry"
+
+    # Ensure host .npmrc exists so npm login persists across runs
+    if [[ ! -f "$HOME/.npmrc" ]]; then
+        : > "$HOME/.npmrc" || true
+        chmod 600 "$HOME/.npmrc" 2>/dev/null || true
+    fi
+
+    __SHIM_TOOL_MOUNTS=(
+        -v "$HOME/.npm":/root/.npm
+        -v "$HOME/.npmrc":/root/.npmrc
+        -v "$HOME/.cache/pnpm":/root/.cache/pnpm
+        -v "$HOME/.cache/yarn":/root/.cache/yarn
+        -v "$HOME/.yarn/berry":/root/.yarn/berry
+        -v "$HOME/.config/pnpm":/root/.config/pnpm
+        -v "$corepack_dir":"$NODE_SHIMS_COREPACK_DIR_IN_CONTAINER"
+        -e COREPACK_ENABLE_STRICT=0
+        -e COREPACK_ENABLE_NETWORK=1
+    )
+}
+
+# Print a sh snippet that makes corepack available (installing the pinned
+# NODE_SHIMS_COREPACK_VERSION into the mounted dir on images without it) and
+# enables it so yarn/pnpm follow the project's packageManager field.
+corepack_setup_script() {
+    local version="${NODE_SHIMS_COREPACK_VERSION:-0.36.0}"
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || version=0.36.0
+    local dir="$NODE_SHIMS_COREPACK_DIR_IN_CONTAINER"
+    printf '%s' "if ! command -v corepack >/dev/null 2>&1; then export PATH=$dir/bin:\$PATH; [ \"\$(cat $dir/.version 2>/dev/null)\" = '$version' ] || { npm install -g --prefix $dir --no-audit --no-fund 'corepack@$version' >/dev/null 2>&1 && echo '$version' > $dir/.version; } || true; fi"
+    printf '%s' "; corepack enable >/dev/null 2>&1 || true; corepack install >/dev/null 2>&1 || true"
+}
+
 # Execute command in Docker container
 docker_exec() {
     local tool="$1"
@@ -282,32 +329,13 @@ docker_exec() {
     prepare_project_mounts
     append_extra_host_mounts "$__SHIM_WORKDIR_PHYSICAL" "$@"
     append_op_run_env
-    # Node 25+ images no longer bundle corepack. A pinned copy is installed
-    # once into this host dir and reused (it is plain JS, any Node works).
-    local corepack_dir="$HOME/.cache/node-shims/corepack"
-    # Yarn 2+ keeps its package cache here and PnP resolves into it at
-    # runtime, so it must outlive the container that ran `yarn install`.
-    mkdir -p "$corepack_dir" "$HOME/.yarn/berry"
+    prepare_tool_mounts
     local -a args=(run --rm
         "${__SHIM_PROJECT_MOUNTS[@]}"
         "${__SHIM_OP_ENV[@]}"
-        -v "$HOME/.npm":/root/.npm
-        -v "$HOME/.npmrc":/root/.npmrc
-        -v "$HOME/.cache/pnpm":/root/.cache/pnpm
-        -v "$HOME/.cache/yarn":/root/.cache/yarn
-        -v "$HOME/.yarn/berry":/root/.yarn/berry
-        -v "$HOME/.config/pnpm":/root/.config/pnpm
-        -v "$corepack_dir":/opt/node-shims-corepack
-        -e COREPACK_ENABLE_STRICT=0
-        -e COREPACK_ENABLE_NETWORK=1
+        "${__SHIM_TOOL_MOUNTS[@]}"
     )
-    
-    # Ensure host .npmrc exists so npm login persists across runs
-    if [[ ! -f "$HOME/.npmrc" ]]; then
-        : > "$HOME/.npmrc" || true
-        chmod 600 "$HOME/.npmrc" 2>/dev/null || true
-    fi
-    
+
     # Add interactive mode only if we have a TTY and it's not a simple version check
     if [[ -t 0 && -t 1 && ! "$*" =~ (--version|--help|-v|-h) ]]; then
         args+=(-it)
@@ -334,7 +362,7 @@ docker_exec() {
 
     # Map ports for development servers
     if should_map_ports "$*"; then
-        IFS=',' read -ra ports <<< "${DOCKER_NODE_PORTS:-3000,5173,8080,4200,3001,4000,5000,8787}"
+        IFS=',' read -ra ports <<< "${DOCKER_NODE_PORTS:-$NODE_SHIMS_DEFAULT_PORTS}"
         for p in "${ports[@]}"; do 
             args+=(-p "${p}:${p}")
         done
@@ -349,10 +377,7 @@ docker_exec() {
 
     # Enable corepack (installing the pinned copy first on images without it);
     # if Docker socket is mounted, install docker-cli so npm scripts can run docker
-    local corepack_version="${NODE_SHIMS_COREPACK_VERSION:-0.36.0}"
-    [[ "$corepack_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || corepack_version=0.36.0
-    local setup="if ! command -v corepack >/dev/null 2>&1; then export PATH=/opt/node-shims-corepack/bin:\$PATH; [ \"\$(cat /opt/node-shims-corepack/.version 2>/dev/null)\" = '$corepack_version' ] || { npm install -g --prefix /opt/node-shims-corepack --no-audit --no-fund 'corepack@$corepack_version' >/dev/null 2>&1 && echo '$corepack_version' > /opt/node-shims-corepack/.version; } || true; fi"
-    setup="$setup; corepack enable >/dev/null 2>&1 || true; corepack install >/dev/null 2>&1 || true"
+    local setup; setup="$(corepack_setup_script)"
     if use_docker_socket; then
         setup="$setup; apk add --no-cache docker-cli >/dev/null 2>&1 || true"
     fi

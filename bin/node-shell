@@ -11,33 +11,17 @@ img="$(resolve_image)"
 
 prepare_project_mounts
 append_op_run_env
-declare -a args=(run --rm -it \
-    "${__SHIM_PROJECT_MOUNTS[@]}" \
-    "${__SHIM_OP_ENV[@]}" \
-    -v "$HOME/.npm":/root/.npm \
-    -v "$HOME/.npmrc":/root/.npmrc \
-    -v "$HOME/.cache/pnpm":/root/.cache/pnpm \
-    -v "$HOME/.cache/yarn":/root/.cache/yarn \
-    -v "$HOME/.yarn/berry":/root/.yarn/berry \
-    -v "$HOME/.config/pnpm":/root/.config/pnpm \
-    -e COREPACK_ENABLE_STRICT=0 \
-    -e COREPACK_ENABLE_NETWORK=1
+prepare_tool_mounts
+declare -a args=(run --rm -it
+    "${__SHIM_PROJECT_MOUNTS[@]}"
+    "${__SHIM_OP_ENV[@]}"
+    "${__SHIM_TOOL_MOUNTS[@]}"
 )
 
 # Map common dev ports so shell can run dev servers directly
 if should_map_ports "${*:-}"; then
-    IFS=',' read -ra ports <<< "${DOCKER_NODE_PORTS:-3000,5173,8080,4200,3001,4000,5000}"
+    IFS=',' read -ra ports <<< "${DOCKER_NODE_PORTS:-$NODE_SHIMS_DEFAULT_PORTS}"
     for p in "${ports[@]}"; do args+=(-p "$p:$p"); done
 fi
 
-# Ensure host .npmrc exists for npm login to persist
-if [[ ! -f "$HOME/.npmrc" ]]; then
-    : > "$HOME/.npmrc" || true
-    chmod 600 "$HOME/.npmrc" 2>/dev/null || true
-fi
-
-exec docker "${args[@]}" "$img" sh -lc "corepack enable >/dev/null 2>&1 || true; corepack install >/dev/null 2>&1 || true; exec sh"
-
-
-
-
+exec docker "${args[@]}" "$img" sh -lc "$(corepack_setup_script); exec sh"
