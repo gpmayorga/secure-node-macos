@@ -31,10 +31,11 @@ jobs:
     timeout-minutes: 20
     steps:
     - uses: actions/checkout@v4
-    # Host node for the NODE_SHIMS_LOCAL tests; pnpm 11 needs >= 22.13.
+    # Host node for the NODE_SHIMS_LOCAL tests. Same major as the default
+    # container image, so local and Docker runs use the same Node.
     - uses: actions/setup-node@v4
       with:
-        node-version: '22'
+        node-version: '26'
     - name: Install bats
       run: sudo apt-get update -qq && sudo apt-get install -y -qq bats
     - name: Run smoke tests
