@@ -24,7 +24,7 @@ EOF
     export HOME="$STUB_DIR/home"
     mkdir -p "$HOME"
     export PATH="$SHIMS_DIR:$STUB_DIR:/usr/bin:/bin"
-    unset NODE_IMAGE NODE_SHIMS_MODE NODE_SHIMS_LOCAL NODE_SHIMS_DOCKER DOCKER_NODE_PORTS
+    unset NODE_IMAGE NODE_SHIMS_MODE NODE_SHIMS_LOCAL NODE_SHIMS_DOCKER DOCKER_NODE_PORTS NODE_SHELL_NO_PORTS
 
     make_project
 }
@@ -212,4 +212,39 @@ EOF
 
     PNPM_HOME="$HOME/pnpm-home" pnpm install
     docker_args_have -e "pnpm_config_store_dir=$HOME/pnpm-home/store"
+}
+
+@test "node-shell mounts the corepack dir and bootstraps it like docker_exec" {
+    node-shell
+    docker_args_have -v "$HOME/.cache/node-shims/corepack:/opt/node-shims-corepack"
+    docker_args_have -v "$HOME/.yarn/berry:$HOME/.yarn/berry"
+    docker_args_have -e "YARN_GLOBAL_FOLDER=$HOME/.yarn/berry"
+    docker_args_have -e "pnpm_config_store_dir=$HOME/.local/share/pnpm/store"
+    [ -d "$HOME/.cache/node-shims/corepack" ]
+
+    local shell_setup
+    shell_setup="$(tail -1 "$DOCKER_ARGS_LOG")"
+    [[ "$shell_setup" == *"corepack@0.36.0"* ]]
+    [[ "$shell_setup" == *"; exec sh" ]]
+
+    # The tool shims run the exact same bootstrap before the tool.
+    node --version
+    local exec_setup
+    exec_setup="$(grep -A1 -x -- '-c' "$DOCKER_ARGS_LOG" | tail -1)"
+    [ "${shell_setup%; exec sh}" = "${exec_setup%; exec \"\$@\"}" ]
+}
+
+@test "node-shell maps the same default dev ports as the tool shims" {
+    node-shell
+    docker_args_have -p "5173:5173"
+    docker_args_have -p "8787:8787"
+}
+
+@test "node-shell honours DOCKER_NODE_PORTS and NODE_SHELL_NO_PORTS" {
+    DOCKER_NODE_PORTS="4321" node-shell
+    docker_args_have -p "4321:4321"
+    run ! docker_args_have -p "3000:3000"
+
+    NODE_SHELL_NO_PORTS=1 node-shell
+    run ! grep -qx -- '-p' "$DOCKER_ARGS_LOG"
 }
