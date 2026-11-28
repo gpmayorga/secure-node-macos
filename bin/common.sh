@@ -65,10 +65,30 @@ exec_local() {
     exec "$tool_path" "$@"
 }
 
-# Ensure Docker is available and running
+# Ensure the Docker CLI is installed. Whether the engine is running is not
+# checked up front: `docker info` cost ~60ms on every call, and `docker run`
+# already fails with "Cannot connect to the Docker daemon ... Is the docker
+# daemon running?" when it is not.
 ensure_docker() {
-    command -v docker >/dev/null 2>&1 || { echo "❌ Docker is required"; exit 1; }
-    docker info >/dev/null 2>&1 || { echo "❌ Docker engine not running"; exit 1; }
+    command -v docker >/dev/null 2>&1 || { echo "❌ Docker is required" >&2; exit 1; }
+}
+
+# True if this call may use yarn or pnpm, so corepack has to be set up in the
+# container (~230ms per call). Always for yarn/pnpm. For node/npm/npx, only
+# when the project's package.json pins a package manager or its scripts call
+# yarn, pnpm or corepack (e.g. `npm run build` running `pnpm -r build`).
+# NODE_SHIMS_COREPACK=1|0 forces it on or off.
+needs_corepack() {
+    local tool="$1"
+    if [[ -n "${NODE_SHIMS_COREPACK:-}" ]]; then
+        is_truthy "$NODE_SHIMS_COREPACK"
+        return
+    fi
+    case "$tool" in
+        yarn|pnpm) return 0 ;;
+    esac
+    [[ -f package.json ]] || return 1
+    grep -Eq '"packageManager"[[:space:]]*:|(^|[^A-Za-z0-9_@/.-])(yarn|pnpm|pnpx|corepack)([^A-Za-z0-9_-]|$)' package.json
 }
 
 # Resolve Node.js image tag from various sources
@@ -978,12 +998,16 @@ docker_exec() {
         done
     fi
 
-    # Enable corepack (installing the pinned copy first on images without it);
-    # if Docker socket is mounted, install docker-cli so npm scripts can run docker
-    local corepack_version="${NODE_SHIMS_COREPACK_VERSION:-0.36.0}"
-    [[ "$corepack_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || corepack_version=0.36.0
-    local setup="if ! command -v corepack >/dev/null 2>&1; then export PATH=/opt/node-shims-corepack/bin:\$PATH; [ \"\$(cat /opt/node-shims-corepack/.version 2>/dev/null)\" = '$corepack_version' ] || { npm install -g --prefix /opt/node-shims-corepack --no-audit --no-fund 'corepack@$corepack_version' >/dev/null 2>&1 && echo '$corepack_version' > /opt/node-shims-corepack/.version; } || true; fi"
-    setup="$setup; corepack enable >/dev/null 2>&1 || true; corepack install >/dev/null 2>&1 || true"
+    # Enable corepack when this call may need yarn/pnpm (installing the pinned
+    # copy first on images without it); if Docker socket is mounted, install
+    # docker-cli so npm scripts can run docker
+    local setup=":"
+    if needs_corepack "$tool"; then
+        local corepack_version="${NODE_SHIMS_COREPACK_VERSION:-0.36.0}"
+        [[ "$corepack_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || corepack_version=0.36.0
+        setup="if ! command -v corepack >/dev/null 2>&1; then export PATH=/opt/node-shims-corepack/bin:\$PATH; [ \"\$(cat /opt/node-shims-corepack/.version 2>/dev/null)\" = '$corepack_version' ] || { npm install -g --prefix /opt/node-shims-corepack --no-audit --no-fund 'corepack@$corepack_version' >/dev/null 2>&1 && echo '$corepack_version' > /opt/node-shims-corepack/.version; } || true; fi"
+        setup="$setup; corepack enable >/dev/null 2>&1 || true; corepack install >/dev/null 2>&1 || true"
+    fi
     if use_docker_socket; then
         setup="$setup; if command -v apk >/dev/null 2>&1; then apk add --no-cache docker-cli >/dev/null 2>&1 || true; elif command -v apt-get >/dev/null 2>&1; then (apt-get update -qq && apt-get install -y -qq --no-install-recommends docker.io) >/dev/null 2>&1 || true; fi"
     fi
